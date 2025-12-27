@@ -7,6 +7,7 @@ def main():
     parser.add_argument("--gui", action="store_true", help="Launch GUI interface")
     parser.add_argument("--prefix", type=str, help="Prefix to search for")
     parser.add_argument("--type", type=str, choices=['p2pkh', 'p2wpkh', 'p2sh-p2wpkh'], default='p2pkh', help="Address type")
+    parser.add_argument("-i", "--case-insensitive", action="store_true", help="Case-insensitive search")
     
     args = parser.parse_args()
 
@@ -19,7 +20,7 @@ def main():
         import time
 
         bc = BalanceChecker()
-        gen = CPUGenerator(args.prefix, args.type)
+        gen = CPUGenerator(args.prefix, args.type, case_insensitive=args.case_insensitive)
         gen.start()
         print(f"Searching for prefix '{args.prefix}'...")
         try:

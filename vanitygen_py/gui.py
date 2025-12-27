@@ -13,13 +13,14 @@ class GeneratorThread(QThread):
     stats_updated = Signal(int, float)
     address_found = Signal(str, str, str, float)
     
-    def __init__(self, prefix, addr_type, balance_checker, auto_resume=False, mode='cpu'):
+    def __init__(self, prefix, addr_type, balance_checker, auto_resume=False, mode='cpu', case_insensitive=False):
         super().__init__()
         self.prefix = prefix
         self.addr_type = addr_type
         self.balance_checker = balance_checker
         self.auto_resume = auto_resume
         self.mode = mode
+        self.case_insensitive = case_insensitive
         self.generator = None
         self.running = True
 
@@ -27,7 +28,7 @@ class GeneratorThread(QThread):
         if self.mode == 'gpu':
             self.generator = GPUGenerator(self.prefix, self.addr_type)
         else:
-            self.generator = CPUGenerator(self.prefix, self.addr_type)
+            self.generator = CPUGenerator(self.prefix, self.addr_type, case_insensitive=self.case_insensitive)
             
         self.generator.start()
         start_time = time.time()
@@ -80,6 +81,8 @@ class VanityGenGUI(QMainWindow):
         prefix_layout.addWidget(QLabel("Prefix:"))
         self.prefix_edit = QLineEdit("1")
         prefix_layout.addWidget(self.prefix_edit)
+        self.case_insensitive_check = QCheckBox("Case Insensitive")
+        prefix_layout.addWidget(self.case_insensitive_check)
         settings_layout.addLayout(prefix_layout)
         
         type_layout = QHBoxLayout()
@@ -105,6 +108,11 @@ class VanityGenGUI(QMainWindow):
         self.load_balance_btn = QPushButton("Load Funded Addresses File")
         self.load_balance_btn.clicked.connect(self.load_balance_file)
         settings_layout.addWidget(self.load_balance_btn)
+        
+        self.load_core_btn = QPushButton("Load from Bitcoin Core Data")
+        self.load_core_btn.clicked.connect(self.load_bitcoin_core)
+        settings_layout.addWidget(self.load_core_btn)
+
         self.balance_status_label = QLabel("Balance checking not active")
         settings_layout.addWidget(self.balance_status_label)
         
@@ -164,6 +172,15 @@ class VanityGenGUI(QMainWindow):
             else:
                 QMessageBox.critical(self, "Error", "Failed to load addresses file")
 
+    def load_bitcoin_core(self):
+        if self.balance_checker.load_from_bitcoin_core():
+            self.balance_status_label.setText(self.balance_checker.get_status())
+            self.balance_check.setChecked(True)
+            QMessageBox.information(self, "Success", "Successfully connected to Bitcoin Core data")
+        else:
+            path = self.balance_checker.get_bitcoin_core_db_path()
+            QMessageBox.warning(self, "Failed", f"Could not find or load Bitcoin Core data at {path}.\n\nNote: Direct chainstate parsing requires plyvel and specific Bitcoin Core data structure.")
+
     def toggle_generation(self):
         if self.gen_thread and self.gen_thread.isRunning():
             self.stop_generation()
@@ -177,8 +194,10 @@ class VanityGenGUI(QMainWindow):
         addr_type = addr_types[addr_type_idx]
         
         mode = 'gpu' if self.mode_combo.currentIndex() == 1 else 'cpu'
+        case_insensitive = self.case_insensitive_check.isChecked()
         
-        self.gen_thread = GeneratorThread(prefix, addr_type, self.balance_checker, self.auto_resume.isChecked(), mode)
+        self.gen_thread = GeneratorThread(prefix, addr_type, self.balance_checker, 
+                                        self.auto_resume.isChecked(), mode, case_insensitive)
         self.gen_thread.stats_updated.connect(self.update_stats)
         self.gen_thread.address_found.connect(self.on_address_found)
         self.gen_thread.finished.connect(self.on_gen_finished)
