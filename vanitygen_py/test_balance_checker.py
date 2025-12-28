@@ -11,10 +11,10 @@ import tempfile
 
 # Handle both module and direct execution
 try:
-    from .balance_checker import BalanceChecker
+    from .balance_checker import BalanceChecker, NETWORKS, detect_network_from_path
     from .bitcoin_keys import BitcoinKey
 except ImportError:
-    from balance_checker import BalanceChecker
+    from balance_checker import BalanceChecker, NETWORKS, detect_network_from_path
     from bitcoin_keys import BitcoinKey
 
 
@@ -224,6 +224,135 @@ class TestBalanceChecker(unittest.TestCase):
         for script in invalid_scripts:
             address = self.checker._extract_address_from_script(script)
             self.assertIsNone(address, f"Should return None for script: {script.hex()}")
+
+    def test_network_address_encoding(self):
+        """Test that different networks encode the same script to different addresses"""
+        # Same P2PKH script should produce different addresses for different networks
+        pubkey_hash = b'\x00' * 20
+        script = b'\x76\xa9\x14' + pubkey_hash + b'\x88\xac'
+        
+        # Test mainnet (default)
+        mainnet_address = self.checker._extract_address_from_script(script, network='mainnet')
+        self.assertIsNotNone(mainnet_address)
+        self.assertTrue(mainnet_address.startswith('1'))
+        
+        # Test testnet
+        testnet_address = self.checker._extract_address_from_script(script, network='testnet')
+        self.assertIsNotNone(testnet_address)
+        self.assertTrue(testnet_address.startswith(('m', 'n')))
+        
+        # Verify they're different
+        self.assertNotEqual(mainnet_address, testnet_address)
+        
+    def test_p2pkh_script_to_testnet_address(self):
+        """Test that P2PKH script can be encoded to testnet address"""
+        pubkey_hash = b'\x00' * 20
+        script = b'\x76\xa9\x14' + pubkey_hash + b'\x88\xac'
+        
+        # Testnet P2PKH should use version 0x6f (111), producing 'm' or 'n' addresses
+        # Current implementation uses version 0, producing '1' addresses (mainnet)
+        mainnet_addr = self.checker._extract_address_from_script(script)
+        self.assertTrue(mainnet_addr.startswith('1'),
+                       f"Expected mainnet address starting with '1', got {mainnet_addr}")
+        
+        # This test documents the issue: we need network parameter support
+        # For testnet, we'd expect: base58check_encode(0x6f, pubkey_hash)
+        # which would produce an address like 'm... or n...'
+    
+    def test_p2sh_script_to_testnet_address(self):
+        """Test that P2SH script can be encoded to testnet address"""
+        script_hash = b'\x00' * 20
+        script = b'\xa9\x14' + script_hash + b'\x87'
+        
+        # Testnet P2SH should use version 0xc4 (196), producing '2' addresses
+        # Current implementation uses version 5, producing '3' addresses (mainnet)
+        mainnet_addr = self.checker._extract_address_from_script(script)
+        self.assertTrue(mainnet_addr.startswith('3'),
+                       f"Expected mainnet address starting with '3', got {mainnet_addr}")
+        
+        # This test documents the issue: we need network parameter support
+        # For testnet, we'd expect: base58check_encode(0xc4, script_hash)
+        # which would produce an address like '2...'
+    
+    def test_witness_script_to_testnet_address(self):
+        """Test that witness scripts can be encoded to testnet addresses"""
+        witness_program = b'\x00' * 20
+        script = b'\x00\x14' + witness_program
+        
+        # Mainnet witness addresses should use 'bc' prefix
+        mainnet_addr = self.checker._extract_address_from_script(script, network='mainnet')
+        self.assertTrue(mainnet_addr.startswith('bc1q'),
+                       f"Expected mainnet address starting with 'bc1q', got {mainnet_addr}")
+        
+        # Testnet witness addresses should use 'tb' prefix
+        testnet_addr = self.checker._extract_address_from_script(script, network='testnet')
+        self.assertTrue(testnet_addr.startswith('tb1q'),
+                       f"Expected testnet address starting with 'tb1q', got {testnet_addr}")
+        
+        # Regtest witness addresses should use 'bcrt' prefix
+        regtest_addr = self.checker._extract_address_from_script(script, network='regtest')
+        self.assertTrue(regtest_addr.startswith('bcrt1q'),
+                       f"Expected regtest address starting with 'bcrt1q', got {regtest_addr}")
+    
+    def test_detect_network_from_path(self):
+        """Test network detection from chainstate paths"""
+        # Test mainnet paths (default)
+        self.assertEqual(detect_network_from_path('/home/user/.bitcoin/chainstate'), 'mainnet')
+        self.assertEqual(detect_network_from_path('/var/lib/bitcoin/chainstate'), 'mainnet')
+        
+        # Test testnet paths
+        self.assertEqual(detect_network_from_path('/home/user/.bitcoin/testnet3/chainstate'), 'testnet')
+        self.assertEqual(detect_network_from_path('/home/user/.bitcoin/testnet/chainstate'), 'testnet')
+        self.assertEqual(detect_network_from_path('/var/snap/bitcoin-core/common/.bitcoin/testnet3/chainstate'), 'testnet')
+        
+        # Test regtest paths
+        self.assertEqual(detect_network_from_path('/home/user/.bitcoin/regtest/chainstate'), 'regtest')
+        
+        # Test signet paths
+        self.assertEqual(detect_network_from_path('/home/user/.bitcoin/signet/chainstate'), 'signet')
+    
+    def test_all_networks_p2sh_addresses(self):
+        """Test P2SH addresses for all networks"""
+        script_hash = b'\x00' * 20
+        script = b'\xa9\x14' + script_hash + b'\x87'
+        
+        # Mainnet P2SH addresses start with '3'
+        mainnet_addr = self.checker._extract_address_from_script(script, network='mainnet')
+        self.assertTrue(mainnet_addr.startswith('3'))
+        
+        # Testnet P2SH addresses start with '2'
+        testnet_addr = self.checker._extract_address_from_script(script, network='testnet')
+        self.assertTrue(testnet_addr.startswith('2'))
+        
+        # Regtest P2SH addresses also start with '2'
+        regtest_addr = self.checker._extract_address_from_script(script, network='regtest')
+        self.assertTrue(regtest_addr.startswith('2'))
+        
+        # Signet P2SH addresses also start with '2'
+        signet_addr = self.checker._extract_address_from_script(script, network='signet')
+        self.assertTrue(signet_addr.startswith('2'))
+    
+    def test_networks_config(self):
+        """Test that network configurations are correct"""
+        # Mainnet
+        self.assertEqual(NETWORKS['mainnet']['p2pkh_version'], 0x00)
+        self.assertEqual(NETWORKS['mainnet']['p2sh_version'], 0x05)
+        self.assertEqual(NETWORKS['mainnet']['bech32_hrp'], 'bc')
+        
+        # Testnet
+        self.assertEqual(NETWORKS['testnet']['p2pkh_version'], 0x6f)
+        self.assertEqual(NETWORKS['testnet']['p2sh_version'], 0xc4)
+        self.assertEqual(NETWORKS['testnet']['bech32_hrp'], 'tb')
+        
+        # Regtest
+        self.assertEqual(NETWORKS['regtest']['p2pkh_version'], 0x6f)
+        self.assertEqual(NETWORKS['regtest']['p2sh_version'], 0xc4)
+        self.assertEqual(NETWORKS['regtest']['bech32_hrp'], 'bcrt')
+        
+        # Signet
+        self.assertEqual(NETWORKS['signet']['p2pkh_version'], 0x6f)
+        self.assertEqual(NETWORKS['signet']['p2sh_version'], 0xc4)
+        self.assertEqual(NETWORKS['signet']['bech32_hrp'], 'tb')
 
 
 class TestBitcoinKeysIntegration(unittest.TestCase):

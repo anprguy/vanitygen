@@ -1,12 +1,68 @@
 import os
 import struct
-from typing import List
+from typing import List, Optional
 
 # Handle both module and direct execution
 try:
     from .crypto_utils import hash160, base58check_encode, bech32_encode
 except ImportError:
     from crypto_utils import hash160, base58check_encode, bech32_encode
+
+# Bitcoin network configurations
+NETWORKS = {
+    'mainnet': {
+        'p2pkh_version': 0x00,
+        'p2sh_version': 0x05,
+        'bech32_hrp': 'bc',
+        'name': 'mainnet'
+    },
+    'testnet': {
+        'p2pkh_version': 0x6f,
+        'p2sh_version': 0xc4,
+        'bech32_hrp': 'tb',
+        'name': 'testnet'
+    },
+    'regtest': {
+        'p2pkh_version': 0x6f,
+        'p2sh_version': 0xc4,
+        'bech32_hrp': 'bcrt',
+        'name': 'regtest'
+    },
+    'signet': {
+        'p2pkh_version': 0x6f,
+        'p2sh_version': 0xc4,
+        'bech32_hrp': 'tb',
+        'name': 'signet'
+    }
+}
+
+def detect_network_from_path(path: str) -> str:
+    """
+    Detect Bitcoin network from chainstate path.
+    
+    Args:
+        path: Path to chainstate directory or parent directory
+        
+    Returns:
+        Network name ('mainnet', 'testnet', 'regtest', 'signet')
+    """
+    path_lower = path.lower()
+    
+    # Check path components for network indicators
+    parts = os.path.normpath(path).split(os.sep)
+    for part in parts:
+        part_lower = part.lower()
+        if part_lower == 'testnet3':
+            return 'testnet'
+        elif part_lower == 'regtest':
+            return 'regtest'
+        elif part_lower == 'signet':
+            return 'signet'
+        elif part_lower == 'testnet':
+            return 'testnet'
+    
+    # Default to mainnet
+    return 'mainnet'
 
 class BalanceChecker:
     def __init__(self, data_path=None):
@@ -17,6 +73,29 @@ class BalanceChecker:
         self.db = None
         self.debug_mode = False
         self.debug_messages = []
+        self.network = 'mainnet'
+
+    def set_network(self, network: str):
+        """
+        Set the Bitcoin network for address encoding.
+        
+        This is useful when loading addresses from a file rather than
+        Bitcoin Core chainstate, where network detection isn't possible.
+        
+        Args:
+            network: Network name ('mainnet', 'testnet', 'regtest', 'signet')
+        
+        Raises:
+            ValueError: If network name is not recognized
+        """
+        if network not in NETWORKS:
+            raise ValueError(f"Unknown network '{network}'. Valid networks: {list(NETWORKS.keys())}")
+        self.network = network
+        self._debug(f"Network set to: {network}")
+
+    def get_network(self) -> str:
+        """Get the current network."""
+        return self.network
 
     def _debug(self, message):
         """Add debug message if debug mode is enabled."""
@@ -192,10 +271,28 @@ class BalanceChecker:
 
         return n, offset
 
-    def _extract_address_from_script(self, script):
-        """Extract Bitcoin address from scriptPubKey"""
+    def _extract_address_from_script(self, script, network: Optional[str] = None):
+        """
+        Extract Bitcoin address from scriptPubKey.
+        
+        Args:
+            script: The scriptPubKey bytes
+            network: Network name ('mainnet', 'testnet', 'regtest', 'signet').
+                    If None, uses self.network (default: mainnet).
+        
+        Returns:
+            Bitcoin address as string, or None if script is not recognized
+        """
         if len(script) < 1:
             return None
+        
+        # Get network configuration
+        if network is None:
+            network = self.network
+        if network not in NETWORKS:
+            network = 'mainnet'
+        
+        net_config = NETWORKS[network]
         
         # P2PKH (Pay to Public Key Hash)
         # script: OP_DUP OP_HASH160 <hash> OP_EQUALVERIFY OP_CHECKSIG
@@ -203,7 +300,7 @@ class BalanceChecker:
         if (len(script) == 25 and script[0] == 0x76 and script[1] == 0xa9 and 
             script[2] == 0x14 and script[23] == 0x88 and script[24] == 0xac):
             pubkey_hash = script[3:23]
-            return base58check_encode(0, pubkey_hash)
+            return base58check_encode(net_config['p2pkh_version'], pubkey_hash)
         
         # P2SH (Pay to Script Hash)
         # script: OP_HASH160 <hash> OP_EQUAL
@@ -211,27 +308,27 @@ class BalanceChecker:
         if (len(script) == 23 and script[0] == 0xa9 and script[1] == 0x14 and 
             script[22] == 0x87):
             script_hash = script[2:22]
-            return base58check_encode(5, script_hash)
+            return base58check_encode(net_config['p2sh_version'], script_hash)
         
         # P2WPKH (Pay to Witness Public Key Hash)
         # script: OP_0 <20-byte hash>
         # bytes: 00 14 <20 bytes>
         if (len(script) == 22 and script[0] == 0x00 and script[1] == 0x14):
             witness_program = script[2:22]
-            return bech32_encode('bc', 0, list(witness_program))
+            return bech32_encode(net_config['bech32_hrp'], 0, list(witness_program))
         
         # P2WSH (Pay to Witness Script Hash)
         # script: OP_0 <32-byte hash>
         # bytes: 00 20 <32 bytes>
         if (len(script) == 34 and script[0] == 0x00 and script[1] == 0x20):
             witness_program = script[2:34]
-            return bech32_encode('bc', 0, list(witness_program))
+            return bech32_encode(net_config['bech32_hrp'], 0, list(witness_program))
         
         # P2TR (Taproot)
         # script: OP_1 <32-byte program>
         if (len(script) == 34 and script[0] == 0x51 and script[1] == 0x20):
             witness_program = script[2:34]
-            return bech32_encode('bc', 1, list(witness_program))
+            return bech32_encode(net_config['bech32_hrp'], 1, list(witness_program))
         
         return None
 
@@ -338,6 +435,10 @@ class BalanceChecker:
             self._debug(f"Chainstate directory found at: {path}")
             self._debug(f"Directory contents: {os.listdir(path) if os.path.isdir(path) else 'Not a directory'}")
             self._debug("Successfully opened LevelDB connection")
+            
+            # Detect network from path
+            self.network = detect_network_from_path(path)
+            self._debug(f"Detected network: {self.network}")
             
             # Iterate through all entries in the database
             address_balances = {}
