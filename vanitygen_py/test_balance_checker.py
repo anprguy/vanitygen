@@ -401,6 +401,197 @@ class TestBitcoinKeysIntegration(unittest.TestCase):
             checker.close()
 
 
+class TestCSVLoading(unittest.TestCase):
+    """Test cases for CSV loading functionality"""
+    
+    def setUp(self):
+        """Set up test fixtures"""
+        self.checker = BalanceChecker()
+    
+    def tearDown(self):
+        """Clean up after tests"""
+        self.checker.close()
+    
+    def test_load_from_csv_standard_format(self):
+        """Test loading addresses from standard CSV format"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write("address,balance\n")
+            f.write("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,5000000000\n")
+            f.write("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh,100000\n")
+            f.write("3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy,2500000\n")
+            temp_file = f.name
+        
+        try:
+            result = self.checker.load_from_csv(temp_file)
+            
+            self.assertTrue(result)
+            self.assertTrue(self.checker.is_loaded)
+            self.assertEqual(len(self.checker.address_balances), 3)
+            
+            # Verify balances
+            self.assertEqual(
+                self.checker.get_balance("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
+                5000000000
+            )
+            self.assertEqual(
+                self.checker.get_balance("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"),
+                100000
+            )
+            self.assertEqual(
+                self.checker.get_balance("3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy"),
+                2500000
+            )
+        finally:
+            os.unlink(temp_file)
+    
+    def test_load_from_csv_custom_columns(self):
+        """Test loading CSV with custom column names"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write("addr,amount,type\n")
+            f.write("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,1000000,p2pkh\n")
+            f.write("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh,500000,p2wpkh\n")
+            temp_file = f.name
+        
+        try:
+            result = self.checker.load_from_csv(
+                temp_file,
+                address_column='addr',
+                balance_column='amount'
+            )
+            
+            self.assertTrue(result)
+            self.assertEqual(len(self.checker.address_balances), 2)
+            self.assertEqual(
+                self.checker.get_balance("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
+                1000000
+            )
+        finally:
+            os.unlink(temp_file)
+    
+    def test_load_from_csv_with_commas_in_balance(self):
+        """Test loading CSV with formatted balances (commas in quoted fields)"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write("address,balance\n")
+            # In CSV, values with commas must be quoted to be treated as single field
+            f.write('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,"5,000,000,000"\n')
+            f.write('bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh,"100,000"\n')
+            temp_file = f.name
+        
+        try:
+            result = self.checker.load_from_csv(temp_file)
+            
+            self.assertTrue(result)
+            self.assertEqual(
+                self.checker.get_balance("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
+                5000000000
+            )
+            self.assertEqual(
+                self.checker.get_balance("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"),
+                100000
+            )
+        finally:
+            os.unlink(temp_file)
+    
+    def test_load_from_csv_without_balance_column(self):
+        """Test loading CSV with addresses only (no balance column)"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write("address\n")
+            f.write("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa\n")
+            f.write("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh\n")
+            temp_file = f.name
+        
+        try:
+            result = self.checker.load_from_csv(temp_file)
+            
+            self.assertTrue(result)
+            self.assertEqual(len(self.checker.address_balances), 2)
+            # Should use presence-only mode (balance = 1)
+            self.assertEqual(
+                self.checker.get_balance("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
+                1
+            )
+        finally:
+            os.unlink(temp_file)
+    
+    def test_load_from_csv_nonexistent_file(self):
+        """Test loading from non-existent CSV file"""
+        result = self.checker.load_from_csv("/nonexistent/file.csv")
+        self.assertFalse(result)
+        self.assertFalse(self.checker.is_loaded)
+    
+    def test_load_from_csv_empty_file(self):
+        """Test loading from empty CSV file"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write("address,balance\n")
+            temp_file = f.name
+        
+        try:
+            result = self.checker.load_from_csv(temp_file)
+            self.assertFalse(result)  # Should fail because no addresses loaded
+        finally:
+            os.unlink(temp_file)
+    
+    def test_load_from_csv_missing_address_column(self):
+        """Test loading CSV without required address column"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write("balance,type\n")
+            f.write("1000000,p2pkh\n")
+            temp_file = f.name
+        
+        try:
+            result = self.checker.load_from_csv(temp_file)
+            self.assertFalse(result)
+        finally:
+            os.unlink(temp_file)
+    
+    def test_load_from_csv_with_invalid_balance(self):
+        """Test loading CSV with invalid balance values"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write("address,balance\n")
+            f.write("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,invalid\n")
+            f.write("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh,100000\n")
+            temp_file = f.name
+        
+        try:
+            result = self.checker.load_from_csv(temp_file)
+            
+            self.assertTrue(result)
+            self.assertEqual(len(self.checker.address_balances), 2)
+            # Invalid balance should default to 0
+            self.assertEqual(
+                self.checker.get_balance("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
+                0
+            )
+            self.assertEqual(
+                self.checker.get_balance("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"),
+                100000
+            )
+        finally:
+            os.unlink(temp_file)
+    
+    def test_load_from_csv_with_empty_addresses(self):
+        """Test loading CSV with empty address rows"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write("address,balance\n")
+            f.write(",1000000\n")
+            f.write("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,500000\n")
+            f.write("  ,2000000\n")  # Whitespace only
+            temp_file = f.name
+        
+        try:
+            result = self.checker.load_from_csv(temp_file)
+            
+            self.assertTrue(result)
+            # Only one valid address should be loaded
+            self.assertEqual(len(self.checker.address_balances), 1)
+            self.assertEqual(
+                self.checker.get_balance("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
+                500000
+            )
+        finally:
+            os.unlink(temp_file)
+
+
 def run_tests():
     """Run all tests"""
     loader = unittest.TestLoader()
@@ -409,6 +600,7 @@ def run_tests():
     # Add all test cases
     suite.addTests(loader.loadTestsFromTestCase(TestBalanceChecker))
     suite.addTests(loader.loadTestsFromTestCase(TestBitcoinKeysIntegration))
+    suite.addTests(loader.loadTestsFromTestCase(TestCSVLoading))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)
