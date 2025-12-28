@@ -9,3 +9,16 @@ venv/
 .env
 oclvanityminer
 vanitygen
+
+# CSV files (address lists)
+addresses*.csv
+funded_addresses.csv
+custom_addresses.csv
+temp_addresses.csv
+
+# Compressed CSV files
+*.csv.gz
+
+# Test artifacts
+test_*.csv
+*.tmp

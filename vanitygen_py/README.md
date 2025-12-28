@@ -47,12 +47,13 @@ python -m vanitygen_py.main --prefix 1ABC
 
 ## Balance Checking
 
-The vanity address generator now supports **real-time balance checking** against your local Bitcoin Core blockchain data using plyvel to read the LevelDB chainstate directly. Features include:
+The vanity address generator now supports **real-time balance checking** against your local Bitcoin Core blockchain data. Features include:
 
 - **Network-aware address encoding**: Automatically detects mainnet/testnet/regtest/signet
 - **Multiple address types**: P2PKH, P2SH, P2WPKH, P2WSH, P2TR
 - **Fast in-memory lookups**: All funded addresses cached after initial load
-- **File-based option**: Load addresses from a text file instead of chainstate
+- **Multiple extraction methods**: Direct LevelDB (plyvel), btcposbal2csv, or CSV files
+- **CSV import/export**: Save and reuse address lists for faster loading
 - **Debug mode**: See detailed extraction info including addresses being derived
 
 ### Enabling Debug Mode
@@ -106,8 +107,55 @@ Debug output will show:
 
 For detailed documentation, see [BITCOIN_CORE_INTEGRATION.md](BITCOIN_CORE_INTEGRATION.md)
 
-### Method 2: Address File
+### Method 2: btcposbal2csv (Fast C++ Tool)
 
-You can also load addresses from a text file (one address per line). This is useful if you prefer not to use Bitcoin Core directly or if you want to use a pre-processed address list.
+**Recommended for best performance!**
 
-Generate this file from your local Bitcoin Core blockchain using third-party tools that dump the UTXO set. Load this file in the Settings tab.
+[btcposbal2csv](https://github.com/graymauser/btcposbal2csv) is a high-performance C++ tool that quickly extracts all funded addresses from Bitcoin Core's chainstate and exports them to CSV format.
+
+**Benefits:**
+- 2-5x faster than direct Python plyvel loading
+- CSV output can be cached and reused (instant loading)
+- Lower memory usage during extraction
+- Portable CSV format for sharing/archiving
+
+**Usage:**
+```python
+from vanitygen_py.balance_checker import BalanceChecker
+
+# Method A: Auto-extract (detects Bitcoin Core path automatically)
+checker = BalanceChecker()
+checker.extract_addresses_with_btcposbal2csv()
+
+# Method B: Extract to specific file for reuse
+checker.extract_addresses_with_btcposbal2csv(output_csv="addresses.csv")
+
+# Method C: Load from previously extracted CSV
+checker.load_from_csv("addresses.csv")
+```
+
+**Installation:**
+```bash
+git clone https://github.com/graymauser/btcposbal2csv
+cd btcposbal2csv
+make
+sudo cp btcposbal2csv /usr/local/bin/
+```
+
+See [BTCPOSBAL2CSV_INTEGRATION.md](../BTCPOSBAL2CSV_INTEGRATION.md) for complete documentation.
+
+### Method 3: Address File
+
+You can also load addresses from a text file (one address per line) or CSV file. This is useful if you prefer not to use Bitcoin Core directly or if you want to use a pre-processed address list.
+
+**Text file:**
+```python
+checker = BalanceChecker()
+checker.load_addresses("addresses.txt")  # One address per line
+```
+
+**CSV file:**
+```python
+checker = BalanceChecker()
+checker.load_from_csv("addresses.csv")  # address,balance format
+```
