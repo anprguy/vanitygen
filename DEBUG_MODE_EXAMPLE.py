@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""
+Example demonstrating how to enable debug mode to see addresses 
+being extracted from Bitcoin Core chainstate data.
+"""
+
+from vanitygen_py.balance_checker import BalanceChecker, detect_network_from_path
+
+def main():
+    """Demonstrate debug mode usage."""
+    
+    print("=" * 80)
+    print("CHAINSTATE DEBUG MODE - SEEING ADDRESSES BEING EXTRACTED")
+    print("=" * 80)
+    print()
+    
+    print("When loading addresses from Bitcoin Core chainstate, you can enable debug mode")
+    print("to see detailed information about what's being processed:")
+    print()
+    print("  1. Which network was detected")
+    print("  2. How many UTXO entries were found")
+    print("  3. Version, height, and coinbase status of each UTXO")
+    print("  4. The scriptPubKey for each UTXO (hex)")
+    print("  5. The EXTRACTED ADDRESS for each UTXO")
+    print()
+    
+    # Create a checker and enable debug mode
+    checker = BalanceChecker()
+    
+    print("ENABLE DEBUG MODE:")
+    print("-" * 80)
+    checker.enable_debug(True)  # This enables debug output
+    print()
+    
+    print("EXAMPLE DEBUG OUTPUT:")
+    print("-" * 80)
+    print("When you load from chainstate with debug mode enabled, you'll see:")
+    print()
+    print("[DEBUG] plyvel library imported successfully")
+    print("[DEBUG] Attempting to open LevelDB at: /home/user/.bitcoin/chainstate")
+    print("[DEBUG] Chainstate directory found at: /home/user/.bitcoin/chainstate")
+    print("[DEBUG] Successfully opened LevelDB connection")
+    print("[DEBUG] Detected network: mainnet")
+    print("[DEBUG] Starting to iterate through LevelDB entries...")
+    print("[DEBUG] Processing UTXO entry 1: key_len=37, value_len=45")
+    print("[DEBUG]   Version: 0")
+    print("[DEBUG]   Height: 800000, Coinbase: False")
+    print("[DEBUG]   Amount: 10000000 satoshis")
+    print("[DEBUG]   Script size: 25")
+    print("[DEBUG]   Script: 76a914f1d7f7309c799018b4f5a4e5d50306d5255f0e9f3ca88ac")
+    print("[DEBUG]   Extracted address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+    print("[DEBUG]   Added/updated address in balances: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+    print("[DEBUG] Processing UTXO entry 2: key_len=37, value_len=45")
+    print("[DEBUG]   Script: 76a9144c5ef2b535c4d2e9e1f8a5b4b3e5d6c8d5e5b9a0e3df6e88ac")
+    print("[DEBUG]   Extracted address: 3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy")
+    print("[DEBUG]   Added/updated address in balances: 3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy")
+    print("...")
+    print("[DEBUG] Total entries processed: 12345678")
+    print("[DEBUG] Skipped entries (non-UTXO): 450")
+    print("[DEBUG] UTXO entries encountered: 11908245")
+    print("[DEBUG] UTXO entries with addresses: 11765432")
+    print("[DEBUG] Unique addresses extracted: 5829431")
+    print()
+    
+    print("USAGE IN YOUR CODE:")
+    print("-" * 80)
+    print("```python")
+    print("from vanitygen_py.balance_checker import BalanceChecker")
+    print()
+    print("checker = BalanceChecker()")
+    print("checker.enable_debug(True)  # ← Enable debug mode to see addresses!")
+    print()
+    print("# Load from Bitcoin Core chainstate")
+    print("if checker.load_from_bitcoin_core():")
+    print("    print(f'Loaded {len(checker.address_balances)} addresses')")
+    print("    # Debug output will show all addresses being extracted!")
+    print("```")
+    print()
+    
+    print("DISABLING DEBUG MODE:")
+    print("-" * 80)
+    print("If you want to disable debug mode later:")
+    print("```python")
+    print("checker.enable_debug(False)")
+    print("```")
+    print()
+    
+    print("GETTING DEBUG MESSAGES:")
+    print("-" * 80)
+    print("You can also retrieve debug messages programmatically:")
+    print("```python")
+    print("messages = checker.get_debug_messages()")
+    print("for msg in messages:")
+    print("    print(msg)")
+    print("```")
+    print()
+    
+    print("WHY USE DEBUG MODE?")
+    print("-" * 80)
+    print("Debug mode is useful for:")
+    print("  ✓ Troubleshooting chainstate loading issues")
+    print("  ✓ Verifying network detection is working")
+    print("  ✓ Seeing which address types are being extracted")
+    print("  ✓ Understanding the UTXO structure")
+    print("  ✓ Confirming addresses are being encoded correctly")
+    print("  ✓ Identifying why certain addresses might be missing")
+    print()
+    
+    print("=" * 80)
+    print("SUMMARY")
+    print("=" * 80)
+    print()
+    print("To see addresses being extracted from chainstate:")
+    print("  1. Create BalanceChecker instance")
+    print("  2. Call checker.enable_debug(True)")
+    print("  3. Load from chainstate: checker.load_from_bitcoin_core()")
+    print("  4. Watch debug output showing each address!")
+    print()
+    print("Addresses shown in debug output include:")
+    print("  - P2PKH addresses (starting with '1' or 'm'/'n')")
+    print("  - P2SH addresses (starting with '3' or '2')")
+    print("  - Witness addresses (starting with 'bc1', 'tb1', 'bcrt1')")
+    print()
+    print("=" * 80)
+
+if __name__ == '__main__':
+    main()
