@@ -49,7 +49,7 @@ class LoadBitcoinCoreThread(QThread):
 
 class GeneratorThread(QThread):
     stats_updated = Signal(int, float)
-    address_found = Signal(str, str, str, float, bool, str)
+    address_found = Signal(str, str, str, float, bool)
     
     def __init__(
         self,
@@ -626,10 +626,11 @@ Whoever has this key controls these funds.<br><br>
             self.gpu_status_label.setText("Idle")
             self.gpu_status_label.setStyleSheet("color: gray; font-weight: bold;")
 
-    def on_address_found(self, addr, wif, pubkey, balance, is_in_funded_list, addr_type=None):
-        print(f"DEBUG: on_address_found called with addr_type={addr_type}")
-        # Update address type counter
-        if addr_type:
+    def on_address_found(self, addr, wif, pubkey, balance, is_in_funded_list):
+        addr_type = None
+        if self.gen_thread and self.gen_thread.addr_type:
+            addr_type = self.gen_thread.addr_type
+            # Update address type counter
             print(f"Updating counter for {addr_type}")
             self.address_counters[addr_type] = self.address_counters.get(addr_type, 0) + 1
             self.update_address_counters()
