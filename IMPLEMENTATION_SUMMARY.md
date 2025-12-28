@@ -209,6 +209,9 @@ OK
 ### New Dependencies
 
 - **plyvel**: Python LevelDB interface (already in requirements.txt)
+  - *Requires system dependencies*: `libleveldb-dev`
+- **pyopencl**: Python OpenCL interface (already in requirements.txt)
+  - *Requires system dependencies*: `ocl-icd-opencl-dev opencl-headers`
 
 ### Existing Dependencies Used
 
