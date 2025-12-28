@@ -53,6 +53,27 @@ The vanity address generator now supports **real-time balance checking** against
 - **Multiple address types**: P2PKH, P2SH, P2WPKH, P2WSH, P2TR
 - **Fast in-memory lookups**: All funded addresses cached after initial load
 - **File-based option**: Load addresses from a text file instead of chainstate
+- **Debug mode**: See detailed extraction info including addresses being derived
+
+### Enabling Debug Mode
+
+To see addresses being extracted from chainstate in real-time:
+
+```python
+from vanitygen_py.balance_checker import BalanceChecker
+
+checker = BalanceChecker()
+checker.enable_debug(True)  # Enable debug mode
+if checker.load_from_bitcoin_core():
+    print(f"Loaded {len(checker.address_balances)} addresses")
+```
+
+Debug output will show:
+- Detected Bitcoin network
+- UTXO details (version, height, coinbase flag, amount)
+- ScriptPubKey for each UTXO
+- **Extracted address for each UTXO** ← This shows addresses!
+- Summary statistics
 
 ### Method 1: Bitcoin Core LevelDB (Recommended)
 

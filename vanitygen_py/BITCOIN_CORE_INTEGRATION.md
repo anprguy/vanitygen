@@ -278,6 +278,30 @@ Get the current Bitcoin network.
 
 **Returns:** `str` - Network name ('mainnet', 'testnet', 'regtest', 'signet')
 
+#### `enable_debug(enabled=True)`
+Enable or disable debug mode for troubleshooting.
+
+**Parameters:**
+- `enabled`: True to enable debug mode, False to disable
+
+**Returns:** `None`
+
+**Note:** When enabled, detailed information about the chainstate loading process is printed to console, including:
+  - Detected Bitcoin network
+  - UTXO entry details (version, height, coinbase flag, amount)
+  - ScriptPubKey for each UTXO
+  - **Extracted addresses for each UTXO**
+  - Summary statistics
+
+Use this to verify addresses are being extracted correctly.
+
+#### `get_debug_messages()`
+Get all debug messages that have been logged.
+
+**Returns:** `list` - List of debug message strings
+
+**Note:** This allows programmatic access to debug information.
+
 #### `close()`
 Clean up resources (close database connection if open).
 
@@ -293,6 +317,40 @@ The BalanceChecker automatically detects and supports all Bitcoin networks:
 | signet | 0x6f | 0xc4 | tb | mfWyW5fc9NUj... | tb1qw508d6q... |
 
 **Important**: When loading from Bitcoin Core, the network is automatically detected from the chainstate directory path. When loading from a file, use `set_network()` to specify the correct network.
+
+## Debug Mode
+
+To see addresses being extracted in real-time from chainstate, enable debug mode:
+
+```python
+from vanitygen_py.balance_checker import BalanceChecker
+
+checker = BalanceChecker()
+checker.enable_debug(True)  # Show detailed extraction info
+checker.load_from_bitcoin_core()
+```
+
+When enabled, you'll see debug output like:
+```
+[DEBUG] Detected network: mainnet
+[DEBUG] Processing UTXO entry 1: key_len=37, value_len=45
+[DEBUG]   Version: 0
+[DEBUG]   Height: 800000, Coinbase: False
+[DEBUG]   Amount: 10000000 satoshis
+[DEBUG]   Script size: 25
+[DEBUG]   Script: 76a914f1d7f7309c799018b4f5a4e5d50306d5255f0e9f3ca88ac
+[DEBUG]   Extracted address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa  ← Your address!
+[DEBUG]   Added/updated address in balances: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+```
+
+This allows you to:
+- ✅ Verify network detection is working correctly
+- ✅ See which addresses are being extracted in real-time
+- ✅ Troubleshoot any issues with address extraction
+- ✅ Confirm addresses use correct prefix for network
+- ✅ Understand the UTXO structure
+
+For a complete example, see `DEBUG_MODE_EXAMPLE.py` in the project root.
 
 ## Future Enhancements
 

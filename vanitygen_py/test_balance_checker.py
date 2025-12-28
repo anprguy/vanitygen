@@ -36,6 +36,19 @@ class TestBalanceChecker(unittest.TestCase):
         self.assertEqual(len(self.checker.funded_addresses), 0)
         self.assertEqual(len(self.checker.address_balances), 0)
     
+    def test_debug_mode(self):
+        """Test debug mode enable/disable"""
+        # Initially disabled
+        self.assertFalse(self.checker.debug_mode)
+        
+        # Enable debug mode
+        self.checker.enable_debug(True)
+        self.assertTrue(self.checker.debug_mode)
+        
+        # Disable debug mode
+        self.checker.enable_debug(False)
+        self.assertFalse(self.checker.debug_mode)
+    
     def test_load_addresses_from_file(self):
         """Test loading addresses from a text file"""
         # Create a temporary file with test addresses

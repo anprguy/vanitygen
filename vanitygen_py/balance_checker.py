@@ -75,6 +75,22 @@ class BalanceChecker:
         self.debug_messages = []
         self.network = 'mainnet'
 
+    def enable_debug(self, enabled=True):
+        """
+        Enable or disable debug mode.
+        
+        When enabled, debug messages are printed to console and stored internally.
+        This is useful for troubleshooting chainstate loading and address extraction.
+        
+        Args:
+            enabled: True to enable debug mode, False to disable (default: True)
+        """
+        self.debug_mode = enabled
+        if enabled:
+            print("[DEBUG] Debug mode enabled")
+        else:
+            print("[DEBUG] Debug mode disabled")
+
     def set_network(self, network: str):
         """
         Set the Bitcoin network for address encoding.
