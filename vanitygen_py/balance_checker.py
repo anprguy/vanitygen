@@ -386,6 +386,10 @@ class BalanceChecker:
         appdata = os.environ.get('APPDATA')
 
         base_dirs = [
+            # Linux custom (per-user)
+            os.path.join(home, "Desktop", "blockchain", "chainstate"),
+            # Linux custom (per-user)
+            os.path.join(home, "Desktop", "blockchain"),
             # Linux snap install (per-user)
             os.path.join(home, "snap", "bitcoin-core", "common", ".bitcoin"),
             # Linux snap install (system-wide daemon)
