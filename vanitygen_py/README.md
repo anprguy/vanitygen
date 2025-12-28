@@ -47,7 +47,12 @@ python -m vanitygen_py.main --prefix 1ABC
 
 ## Balance Checking
 
-The vanity address generator now supports **real-time balance checking** against your local Bitcoin Core blockchain data using plyvel to read the LevelDB chainstate directly.
+The vanity address generator now supports **real-time balance checking** against your local Bitcoin Core blockchain data using plyvel to read the LevelDB chainstate directly. Features include:
+
+- **Network-aware address encoding**: Automatically detects mainnet/testnet/regtest/signet
+- **Multiple address types**: P2PKH, P2SH, P2WPKH, P2WSH, P2TR
+- **Fast in-memory lookups**: All funded addresses cached after initial load
+- **File-based option**: Load addresses from a text file instead of chainstate
 
 ### Method 1: Bitcoin Core LevelDB (Recommended)
 

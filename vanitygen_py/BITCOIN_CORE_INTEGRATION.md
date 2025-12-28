@@ -10,6 +10,8 @@ The BalanceChecker class can now directly read Bitcoin Core's LevelDB chainstate
 - **No external dependencies** on block explorers or APIs
 - **Support for multiple address types**: P2PKH (1...), P2SH (3...), P2WPKH (bc1q...), P2WSH (bc1q...), and P2TR (bc1p...)
 - **Fast lookups** by caching address balances in memory
+- **Support for all Bitcoin networks**: mainnet, testnet, regtest, signet (auto-detected from chainstate path)
+- **Correct address encoding** for each network (see NETWORK_FIX_DOCUMENTATION.md for details)
 
 ## Prerequisites
 
@@ -259,8 +261,38 @@ Get a human-readable status message.
 
 **Returns:** `str` - Status description
 
+#### `set_network(network)`
+Manually set the Bitcoin network for address encoding.
+
+**Parameters:**
+- `network`: Network name ('mainnet', 'testnet', 'regtest', 'signet')
+
+**Returns:** `None`
+
+**Raises:** `ValueError` if network name is not recognized
+
+**Note:** This is useful when loading addresses from a file (not from Bitcoin Core) where network cannot be auto-detected.
+
+#### `get_network()`
+Get the current Bitcoin network.
+
+**Returns:** `str` - Network name ('mainnet', 'testnet', 'regtest', 'signet')
+
 #### `close()`
 Clean up resources (close database connection if open).
+
+## Network Support
+
+The BalanceChecker automatically detects and supports all Bitcoin networks:
+
+| Network | P2PKH Version | P2SH Version | Witness HRP | Example P2PKH | Example Witness |
+|---------|----------------|---------------|--------------|-----------------|----------------|
+| mainnet | 0x00 | 0x05 | bc | 1A1zP1eP5QG... | bc1qw508d6q... |
+| testnet | 0x6f | 0xc4 | tb | mfWyW5fc9NUj... | tb1qw508d6q... |
+| regtest | 0x6f | 0xc4 | bcrt | mfWyW5fc9NUj... | bcrt1qw508d6q... |
+| signet | 0x6f | 0xc4 | tb | mfWyW5fc9NUj... | tb1qw508d6q... |
+
+**Important**: When loading from Bitcoin Core, the network is automatically detected from the chainstate directory path. When loading from a file, use `set_network()` to specify the correct network.
 
 ## Future Enhancements
 
