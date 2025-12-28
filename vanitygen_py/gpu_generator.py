@@ -3,6 +3,7 @@ import time
 import queue
 import os
 import struct
+import multiprocessing
 # Handle both module and direct execution
 try:
     from .bitcoin_keys import BitcoinKey
@@ -16,6 +17,27 @@ except ImportError:
     cl = None
     np = None
 
+def _process_keys_batch(args):
+    """Worker function to process a batch of keys on CPU"""
+    key_bytes_list, addr_type, prefix = args
+    results = []
+    for key_bytes in key_bytes_list:
+        key = BitcoinKey(key_bytes)
+        # Generate address
+        if addr_type == 'p2pkh':
+            address = key.get_p2pkh_address()
+        elif addr_type == 'p2wpkh':
+            address = key.get_p2wpkh_address()
+        elif addr_type == 'p2sh-p2wpkh':
+            address = key.get_p2sh_p2wpkh_address()
+        else:
+            address = key.get_p2pkh_address()
+
+        # Check for prefix match
+        if address.startswith(prefix):
+            results.append((address, key.get_wif(), key.get_public_key().hex()))
+    return results
+
 class GPUGenerator:
     def __init__(self, prefix, addr_type='p2pkh', batch_size=4096, power_percent=100, device_selector=None):
         self.prefix = prefix
@@ -27,6 +49,7 @@ class GPUGenerator:
         self.stats_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.gpu_available = False
+        self.pool = None
 
         # OpenCL resources
         self.ctx = None
@@ -166,43 +189,45 @@ class GPUGenerator:
         return keys
 
     def _search_loop(self):
-        """Main search loop using GPU for key generation"""
+        """Main search loop using GPU for key generation and multiprocessing for CPU processing"""
+        num_workers = multiprocessing.cpu_count()
+        if self.pool is None:
+            self.pool = multiprocessing.Pool(processes=num_workers)
+
         while not self.stop_event.is_set():
             loop_start = time.time()
 
             # Generate batch of keys on GPU
-            gpu_keys = self._generate_keys_on_gpu(self.batch_size)
+            gpu_keys_data = self._generate_keys_on_gpu(self.batch_size)
 
-            if gpu_keys is None:
+            if gpu_keys_data is None:
                 # GPU failed for this iteration; back off a bit
                 self.stop_event.wait(timeout=0.1)
                 continue
 
-            # Process keys on CPU (EC operations are complex to do on GPU)
+            # Split data into chunks for workers
+            # Convert 8 uint32s to 32 bytes
+            all_key_bytes = [b''.join(struct.pack('<I', word) for word in key_data) for key_data in gpu_keys_data]
+            
+            chunk_size = max(1, len(all_key_bytes) // num_workers)
+            chunks = [all_key_bytes[i:i + chunk_size] for i in range(0, len(all_key_bytes), chunk_size)]
+            
+            worker_args = [(chunk, self.addr_type, self.prefix) for chunk in chunks]
+            
+            # Process chunks in parallel
             try:
-                keys = self._keys_from_gpu_data(gpu_keys)
-
-                for key in keys:
-                    # Generate address
-                    if self.addr_type == 'p2pkh':
-                        address = key.get_p2pkh_address()
-                    elif self.addr_type == 'p2wpkh':
-                        address = key.get_p2wpkh_address()
-                    elif self.addr_type == 'p2sh-p2wpkh':
-                        address = key.get_p2sh_p2wpkh_address()
-                    else:
-                        address = key.get_p2pkh_address()
-
-                    # Check for prefix match
-                    if address.startswith(self.prefix):
-                        self.result_queue.put((address, key.get_wif(), key.get_public_key().hex()))
+                batch_results = self.pool.map(_process_keys_batch, worker_args)
+                
+                for results in batch_results:
+                    for res in results:
+                        self.result_queue.put(res)
 
                 # Update stats
                 with self.stats_lock:
                     self.stats_counter += self.batch_size
 
             except Exception as e:
-                print(f"Error processing keys: {e}")
+                print(f"Error processing keys in parallel: {e}")
 
             power = self.power_percent
             if power is not None and power < 100:
@@ -243,6 +268,11 @@ class GPUGenerator:
 
         self.stop_event.set()
         self.running = False
+
+        if self.pool:
+            self.pool.terminate()
+            self.pool.join()
+            self.pool = None
 
         if self.search_thread and self.search_thread.is_alive():
             self.search_thread.join(timeout=2.0)
