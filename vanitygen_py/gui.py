@@ -119,7 +119,7 @@ class GeneratorThread(QThread):
             while not self.generator.result_queue.empty():
                 addr, wif, pubkey = self.generator.result_queue.get()
                 balance, is_in_funded_list = self.balance_checker.check_balance_and_membership(addr)
-                self.address_found.emit(addr, wif, pubkey, balance, is_in_funded_list)
+                self.address_found.emit(addr, wif, pubkey, balance, is_in_funded_list, self.addr_type)
                 if balance > 0 and not self.auto_resume:
                     # Pause if funded address found (as per requirements)
                     self.running = False
