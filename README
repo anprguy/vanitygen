@@ -46,8 +46,22 @@ Pattern: 1Love
 Address: 1LoveRg5t2NCDLUZh6Q8ixv74M5YGVxXaN
 Privkey: 5JLUmjZiirgziDmWmNprPsNx8DYwfecUNk1FQXmDPaoKB36fX1o
 
+Importing the private key into bitcoin:
 Currently, it is difficult to import the private key into bitcoin.  
 Sipa's showwallet branch has a new command called "importprivkey" that 
 accepts the base-58 encoded private key.  Vanitygen has been tested to 
 work with that version of bitcoin.
+
+
+Python Extension (vanitygen_py):
+A Python-based GUI and CLI version is also available in the vanitygen_py/
+directory. It supports modern Bitcoin features including SegWit, Taproot,
+and real-time balance checking against local Bitcoin Core data.
+
+To install Python dependencies:
+Linux: sudo apt-get install ocl-icd-opencl-dev opencl-headers libleveldb-dev build-essential
+macOS: brew install opencl-headers leveldb
+Then: pip install -r requirements.txt
+
+See vanitygen_py/README.md for more details.
 

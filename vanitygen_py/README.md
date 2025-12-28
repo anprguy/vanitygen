@@ -12,6 +12,24 @@ A Python-based Bitcoin vanity address generator that supports both CPU and GPU a
 - Balance Checking: Check against local UTXO set
 
 ## Requirements
+
+### System Dependencies
+
+Before installing Python packages, you may need to install system-level development libraries.
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt-get update
+sudo apt-get install ocl-icd-opencl-dev opencl-headers libleveldb-dev build-essential
+```
+
+**macOS:**
+```bash
+brew install opencl-headers leveldb
+```
+
+### Python Packages
+
 ```
 pip install -r requirements.txt
 ```

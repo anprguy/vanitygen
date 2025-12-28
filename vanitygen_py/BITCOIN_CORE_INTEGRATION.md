@@ -14,8 +14,11 @@ The BalanceChecker class can now directly read Bitcoin Core's LevelDB chainstate
 ## Prerequisites
 
 1. **Bitcoin Core** must be installed and fully synchronized
-2. **plyvel** Python package must be installed (already in requirements.txt)
-3. Bitcoin Core must be stopped before accessing the chainstate database
+2. **System Dependencies** for LevelDB and OpenCL:
+   - Linux: `sudo apt-get install ocl-icd-opencl-dev opencl-headers libleveldb-dev build-essential`
+   - macOS: `brew install opencl-headers leveldb`
+3. **plyvel** Python package must be installed (already in requirements.txt)
+4. Bitcoin Core must be stopped before accessing the chainstate database
 
 ## Setting Up Bitcoin Core
 

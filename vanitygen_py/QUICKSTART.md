@@ -7,11 +7,30 @@ This guide will help you get started with using Bitcoin Core's LevelDB data for 
 - [ ] Bitcoin Core installed and fully synchronized
 - [ ] Bitcoin Core stopped (before reading chainstate)
 - [ ] Python 3.8 or higher
+- [ ] System dependencies installed (OpenCL headers, LevelDB development files)
 - [ ] All required packages installed (`pip install -r requirements.txt`)
 
 ## Step-by-Step Setup
 
-### 1. Install Bitcoin Core
+### 1. Install System Dependencies
+
+Before installing Python packages, you need to install some system-level development libraries.
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt-get update
+sudo apt-get install ocl-icd-opencl-dev opencl-headers libleveldb-dev build-essential
+```
+
+**macOS:**
+```bash
+brew install opencl-headers leveldb
+```
+
+**Windows:**
+System dependencies are usually handled by the pre-built binaries or installers. If you're building from source, ensure you have the appropriate SDKs installed.
+
+### 2. Install Bitcoin Core
 
 **Linux (Ubuntu/Debian):**
 ```bash
@@ -26,7 +45,7 @@ brew install bitcoin
 **Windows:**
 Download from https://bitcoincore.org/en/download/
 
-### 2. Synchronize the Blockchain
+### 3. Synchronize the Blockchain
 
 Run Bitcoin Core and wait for full synchronization. This can take several hours or days depending on your internet speed and hardware.
 
@@ -40,7 +59,7 @@ bitcoin-cli getblockchaininfo | grep "blocks"
 
 Wait until `blocks` equals `headers`.
 
-### 3. Stop Bitcoin Core
+### 4. Stop Bitcoin Core
 
 **Important:** Stop Bitcoin Core before reading the chainstate database.
 
@@ -50,7 +69,7 @@ bitcoin-cli stop
 
 Wait a few seconds to ensure the process has fully stopped.
 
-### 4. Install Python Dependencies
+### 5. Install Python Dependencies
 
 ```bash
 # From the project root directory
@@ -65,13 +84,13 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 5. Launch the Vanity Address Generator
+### 6. Launch the Vanity Address Generator
 
 ```bash
 python -m vanitygen_py.main --gui
 ```
 
-### 6. Load Bitcoin Core Data
+### 7. Load Bitcoin Core Data
 
 1. In the GUI, go to the **Settings** tab
 2. Click **"Load from Bitcoin Core Data"** button
@@ -86,7 +105,7 @@ python -m vanitygen_py.main --gui
    Loaded 12345678 addresses from Bitcoin Core chainstate
    ```
 
-### 7. Generate Vanity Addresses with Balance Checking
+### 8. Generate Vanity Addresses with Balance Checking
 
 1. Enter your desired prefix (e.g., "1Love")
 2. Select address type (P2PKH, P2WPKH, or P2SH-P2WPKH)

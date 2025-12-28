@@ -16,7 +16,10 @@ This allows you to:
 
 1. **Bitcoin Core** installed and fully synchronized
 2. **Bitcoin Core stopped** (before reading chainstate)
-3. Python dependencies installed: `pip install -r requirements.txt`
+3. **System Dependencies** installed:
+   - Linux: `sudo apt-get install ocl-icd-opencl-dev opencl-headers libleveldb-dev build-essential`
+   - macOS: `brew install opencl-headers leveldb`
+4. **Python dependencies** installed: `pip install -r requirements.txt`
 
 ### Usage
 
