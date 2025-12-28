@@ -245,6 +245,10 @@ class VanityGenGUI(QMainWindow):
         self.auto_resume = QCheckBox("Auto-Resume after finding funded address")
         settings_layout.addWidget(self.auto_resume)
         
+        self.show_only_funded_check = QCheckBox("Filter: Only show matches with positive balance")
+        self.show_only_funded_check.setToolTip("Speeds up GUI by not displaying every prefix match, only those with funds.")
+        settings_layout.addWidget(self.show_only_funded_check)
+
         self.load_balance_btn = QPushButton("Load Funded Addresses File")
         self.load_balance_btn.clicked.connect(self.load_balance_file)
         settings_layout.addWidget(self.load_balance_btn)
@@ -372,6 +376,9 @@ class VanityGenGUI(QMainWindow):
         self.prefix_edit.setEnabled(not search_all)
         if search_all:
             self.prefix_edit.setPlaceholderText("Searching all types (prefix not used)")
+            if not self.show_only_funded_check.isChecked():
+                self.show_only_funded_check.setChecked(True)
+                self.log_output.append("Tip: Filter enabled automatically for 'Search All Types' mode.")
         else:
             self.prefix_edit.setPlaceholderText("")
 
@@ -631,10 +638,13 @@ Whoever has this key controls these funds.<br><br>
         if self.gen_thread and self.gen_thread.addr_type:
             addr_type = self.gen_thread.addr_type
             # Update address type counter
-            print(f"Updating counter for {addr_type}")
             self.address_counters[addr_type] = self.address_counters.get(addr_type, 0) + 1
             self.update_address_counters()
         
+        # Filter results if requested
+        if self.show_only_funded_check.isChecked() and balance <= 0:
+            return
+
         membership_status = "✓ YES" if is_in_funded_list else "✗ NO"
         type_display = addr_type if addr_type else 'N/A'
         result_str = f"Address: {addr}\nPrivate Key: {wif}\nPublic Key: {pubkey}\nBalance: {balance}\nIn Funded List: {membership_status}\nAddress Type: {type_display}\n" + "-"*40 + "\n"
