@@ -49,7 +49,7 @@ class LoadBitcoinCoreThread(QThread):
 
 class GeneratorThread(QThread):
     stats_updated = Signal(int, float)
-    address_found = Signal(str, str, str, float, bool)
+    address_found = Signal(str, str, str, float, bool, str)
     
     def __init__(
         self,
@@ -151,6 +151,11 @@ class VanityGenGUI(QMainWindow):
         settings_tab = QWidget()
         settings_layout = QVBoxLayout()
         
+        # Search all address types checkbox
+        self.search_all_types_check = QCheckBox("Search All Bitcoin Address Types")
+        self.search_all_types_check.clicked.connect(self.on_search_all_types_changed)
+        settings_layout.addWidget(self.search_all_types_check)
+        
         prefix_layout = QHBoxLayout()
         prefix_layout.addWidget(QLabel("Prefix:"))
         self.prefix_edit = QLineEdit("1")
@@ -165,6 +170,10 @@ class VanityGenGUI(QMainWindow):
         self.type_combo.addItems(["P2PKH (Legacy)", "P2WPKH (SegWit)", "P2SH-P2WPKH (Nested SegWit)"])
         type_layout.addWidget(self.type_combo)
         settings_layout.addLayout(type_layout)
+        
+        # Auto-save checkbox for funded addresses
+        self.auto_save_check = QCheckBox("Auto-Save Private Keys for Funded Addresses")
+        settings_layout.addWidget(self.auto_save_check)
         
         gen_mode_layout = QHBoxLayout()
         gen_mode_layout.addWidget(QLabel("Generation Mode:"))
@@ -254,6 +263,23 @@ class VanityGenGUI(QMainWindow):
         settings_layout.addWidget(self.debug_check)
 
         self.balance_status_label = QLabel("Balance checking not active")
+        # Address type tally labels (will be updated during generation)
+        self.tally_widget = QWidget()
+        tally_layout = QHBoxLayout()
+        
+        self.p2pkh_count_label = QLabel("P2PKH: 0")
+        tally_layout.addWidget(self.p2pkh_count_label)
+        
+        self.p2wpkh_count_label = QLabel("P2WPKH: 0")
+        tally_layout.addWidget(self.p2wpkh_count_label)
+        
+        self.p2sh_count_label = QLabel("P2SH: 0")
+        tally_layout.addWidget(self.p2sh_count_label)
+        
+        self.tally_widget.setLayout(tally_layout)
+        settings_layout.addWidget(self.tally_widget)
+        
+        self.balance_status_label = QLabel("Balance checking not active")
         settings_layout.addWidget(self.balance_status_label)
         
         self.start_btn = QPushButton("Start Generation")
@@ -262,6 +288,10 @@ class VanityGenGUI(QMainWindow):
         
         settings_tab.setLayout(settings_layout)
         tabs.addTab(settings_tab, "Settings")
+        
+        # Initialize counters
+        self.address_counters = {'p2pkh': 0, 'p2wpkh': 0, 'p2sh-p2wpkh': 0}
+        self.update_address_counters()
         
         # Progress Tab
         progress_tab = QWidget()
@@ -335,6 +365,74 @@ class VanityGenGUI(QMainWindow):
     def copy_results(self):
         clipboard = QApplication.clipboard()
         clipboard.setText(self.results_list.toPlainText())
+
+    def on_search_all_types_changed(self):
+        """Enable/disable prefix box when searching all address types."""
+        search_all = self.search_all_types_check.isChecked()
+        self.prefix_edit.setEnabled(not search_all)
+        if search_all:
+            self.prefix_edit.setPlaceholderText("Searching all types (prefix not used)")
+        else:
+            self.prefix_edit.setPlaceholderText("")
+
+    def update_address_counters(self):
+        """Update the address type counters in the GUI."""
+        self.p2pkh_count_label.setText(f"P2PKH: {self.address_counters['p2pkh']}")
+        self.p2wpkh_count_label.setText(f"P2WPKH: {self.address_counters['p2wpkh']}")
+        self.p2sh_count_label.setText(f"P2SH: {self.address_counters['p2sh-p2wpkh']}")
+
+    def save_funded_address(self, addr, wif, pubkey, balance, addr_type=None):
+        """Save private key info for funded addresses."""
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"funded_address_{addr[:8]}_{timestamp}.txt"
+            
+            with open(filename, 'w') as f:
+                f.write(f"Congratulations! Funded Address Found!\n")
+                f.write(f"{'='*50}\n\n")
+                f.write(f"Address Type: {addr_type or 'P2PKH'}\n")
+                f.write(f"Address: {addr}\n")
+                f.write(f"Balance: {balance:,} satoshis\n")
+                f.write(f"Balance (BTC): {balance / 100_000_000:.8f} BTC\n\n")
+                f.write(f"Private Key (WIF): {wif}\n")
+                f.write(f"Public Key: {pubkey}\n")
+                f.write(f"{'='*50}\n\n")
+                f.write(f"Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"WARNING: Keep this file secure! Whoever has the private key controls the funds.\n")
+            
+            return filename
+        except Exception as e:
+            print(f"Error saving funded address: {e}")
+            return None
+
+    def show_congratulations(self, addr, wif, pubkey, balance, is_in_funded_list):
+        """Show congratulations dialog when funded address found."""
+        title = "🏆 Congratulations! Funded Address Found! 🏆"
+        message = f"""
+<b><font color='green' size='+2'>CONGRATULATIONS!</font></b><br><br>
+
+You found a funded Bitcoin address with balance!<br><br>
+
+<b>Address:</b> {addr}<br>
+<b>Balance:</b> {balance:,} satoshis ({balance / 100_000_000:.8f} BTC)<br>
+<b>In Funded List:</b> {'<b><font color='green'>YES</font></b>' if is_in_funded_list else 'NO'}<br><br>
+
+<b>Private Key:</b><br>
+<font color='red' size='-1'>{wif}</font><br><br>
+
+<b>Public Key:</b><br>
+<font size='-2'>{pubkey}</font><br><br>
+
+<font color='red'><b>⚠ SECURITY WARNING:</b></font><br>
+The private key is displayed above. <b>Secure it immediately!</b><br>
+Whoever has this key controls these funds.<br><br>
+
+<b>Next Steps:</b>
+1. Import the private key into a Bitcoin wallet
+2. Transfer the funds to a new secure address
+3. Never share your private key with anyone
+"""
+        QMessageBox.information(self, title, message)
 
     def load_balance_file(self):
         filename, _ = QFileDialog.getOpenFileName(self, "Open Funded Addresses File", "", "Text Files (*.txt);;All Files (*)")
@@ -432,7 +530,11 @@ class VanityGenGUI(QMainWindow):
             self.start_generation()
 
     def start_generation(self):
-        prefix = self.prefix_edit.text()
+        # Reset address counters when starting new generation
+        self.address_counters = {'p2pkh': 0, 'p2wpkh': 0, 'p2sh-p2wpkh': 0}
+        self.update_address_counters()
+        
+        prefix = self.prefix_edit.text() if not self.search_all_types_check.isChecked() else ""
         addr_type_idx = self.type_combo.currentIndex()
         addr_types = ['p2pkh', 'p2wpkh', 'p2sh-p2wpkh']
         addr_type = addr_types[addr_type_idx]
@@ -476,7 +578,11 @@ class VanityGenGUI(QMainWindow):
         
         self.gen_thread.start()
         self.start_btn.setText("Stop Generation")
-        self.log_output.append(f"Started searching for prefix '{prefix}' ({addr_type})...")
+        
+        if self.search_all_types_check.isChecked():
+            self.log_output.append("Started searching for ALL Bitcoin address types...")
+        else:
+            self.log_output.append(f"Started searching for prefix '{prefix}' ({addr_type})...")
 
     def stop_generation(self):
         if self.gen_thread:
@@ -520,20 +626,37 @@ class VanityGenGUI(QMainWindow):
             self.gpu_status_label.setText("Idle")
             self.gpu_status_label.setStyleSheet("color: gray; font-weight: bold;")
 
-    def on_address_found(self, addr, wif, pubkey, balance, is_in_funded_list):
+    def on_address_found(self, addr, wif, pubkey, balance, is_in_funded_list, addr_type=None):
+        print(f"DEBUG: on_address_found called with addr_type={addr_type}")
+        # Update address type counter
+        if addr_type:
+            print(f"Updating counter for {addr_type}")
+            self.address_counters[addr_type] = self.address_counters.get(addr_type, 0) + 1
+            self.update_address_counters()
+        
         membership_status = "✓ YES" if is_in_funded_list else "✗ NO"
-        result_str = f"Address: {addr}\nPrivate Key: {wif}\nPublic Key: {pubkey}\nBalance: {balance}\nIn Funded List: {membership_status}\n" + "-"*40 + "\n"
+        type_display = addr_type if addr_type else 'N/A'
+        result_str = f"Address: {addr}\nPrivate Key: {wif}\nPublic Key: {pubkey}\nBalance: {balance}\nIn Funded List: {membership_status}\nAddress Type: {type_display}\n" + "-"*40 + "\n"
         self.results_list.append(result_str)
-        self.log_output.append(f"Match found: {addr}")
+        self.log_output.append(f"Match found: {addr} (Type: {type_display})")
         
         if balance > 0:
-            self.log_output.append("!!! FUNDED ADDRESS FOUND !!!")
+            self.log_output.append("🏆 !!! FUNDED ADDRESS FOUND !!! 🏆")
+            
+            # Auto-save private key if enabled
+            saved_file = None
+            if self.auto_save_check.isChecked():
+                saved_file = self.save_funded_address(addr, wif, pubkey, balance, addr_type)
+                if saved_file:
+                    self.log_output.append(f"Private key saved to: {saved_file}")
+            
             if not self.auto_resume.isChecked():
-                # The thread already stopped itself if balance > 0
-                QMessageBox.information(self, "Funded Address Found!", f"Found a funded address: {addr}\nBalance: {balance}\nIn Funded List: {'YES' if is_in_funded_list else 'NO'}")
+                # Show congratulations dialog
+                self.show_congratulations(addr, wif, pubkey, balance, is_in_funded_list)
+                if saved_file:
+                    QMessageBox.information(self, "File Saved", f"Private key information saved to:\n{saved_file}\n\nKeep this file secure!")
             else:
-                # If auto-resume is checked, we should restart if it stopped, 
-                # but wait, how about we just don't stop it in the first place?
+                self.log_output.append("Funded address found, auto-resume is ON - continuing generation...")
                 print("Funded address found, auto-resume is ON")
 
     def on_gen_finished(self):
