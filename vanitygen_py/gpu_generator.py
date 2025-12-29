@@ -472,6 +472,25 @@ class GPUGenerator:
         mf = cl.mem_flags
         gpu_prefix_buffer = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=prefix_buffer)
 
+        # Set up bloom filter for balance checking
+        check_balance = 0
+        gpu_bloom_filter = None
+        bloom_filter_size = 0
+        bloom_buffer = None
+        if self.balance_checker and self.balance_checker.is_loaded:
+            print("Setting up GPU bloom filter for balance checking...")
+            bloom_data, bloom_size = self.balance_checker.create_bloom_filter()
+            if bloom_data is not None:
+                check_balance = 1
+                bloom_filter_size = len(bloom_data)
+                bloom_buffer = np.frombuffer(bloom_data, dtype=np.uint8)
+                gpu_bloom_filter = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=bloom_buffer)
+                print(f"Bloom filter: {bloom_filter_size} bytes ({bloom_size} bits)")
+        else:
+            # Create empty buffer for kernel consistency
+            dummy_buffer = np.zeros(1, dtype=np.uint8)
+            gpu_bloom_filter = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=dummy_buffer)
+
         while not self.stop_event.is_set():
             loop_start = time.time()
 
@@ -484,16 +503,19 @@ class GPUGenerator:
                 cl.enqueue_copy(self.queue, found_count_buf, found_count)
                 self.queue.finish()
 
-                # Execute the full GPU kernel
+                # Execute the full GPU kernel with bloom filter support
                 self.kernel_full(
                     self.queue, (self.batch_size,), None,
-                    results_buf,       # found_addresses
-                    found_count_buf,   # found_count
+                    results_buf,           # found_addresses
+                    found_count_buf,       # found_count
                     np.uint64(self.rng_seed),  # seed
                     np.uint32(self.batch_size),  # batch_size
-                    gpu_prefix_buffer,  # prefix (must be a cl.Buffer)
+                    gpu_prefix_buffer,     # prefix (must be a cl.Buffer)
                     np.int32(prefix_len),  # prefix_len
-                    np.uint32(max_results)  # max_addresses
+                    np.uint32(max_results), # max_addresses
+                    gpu_bloom_filter if gpu_bloom_filter else np.uint32(0),  # bloom_filter
+                    np.uint32(bloom_filter_size),  # filter_size
+                    np.uint32(check_balance)  # check_balance
                 )
 
                 self.queue.finish()
@@ -507,7 +529,11 @@ class GPUGenerator:
                 self.rng_seed += self.batch_size
 
                 # Process found results
+                # First pass: check bloom filter matches (high priority)
                 num_found = found_count[0]
+
+                # Collect all results first
+                results = []
                 for i in range(min(num_found, max_results)):
                     offset = i * 128
 
@@ -527,6 +553,16 @@ class GPUGenerator:
                             break
                         addr += chr(results_buffer[k])
 
+                    # Check if bloom filter matched (byte 96)
+                    bloom_match = results_buffer[offset + 96] == 1
+
+                    results.append((addr, key_bytes, bloom_match))
+
+                # Sort results: bloom filter matches first
+                results.sort(key=lambda x: not x[2])
+
+                # Process results
+                for addr, key_bytes, bloom_match in results:
                     if addr:
                         # Verify with balance checker if available
                         balance = 0
@@ -543,7 +579,9 @@ class GPUGenerator:
                                 balance
                             ))
                             print(f"*** FUNDED ADDRESS FOUND! {addr} ({balance} satoshis) ***")
-                        else:
+                        elif bloom_match:
+                            # Bloom filter matched but balance is 0 (false positive)
+                            # Still report it as a vanity match
                             self.result_queue.put((addr, '', '', 0))
 
                 # Update stats

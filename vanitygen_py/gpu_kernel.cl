@@ -407,7 +407,7 @@ __kernel void generate_private_keys(
 
 // Full GPU address generation - ALL operations on GPU
 // This kernel generates private keys, computes hash160, base58 encodes,
-// and checks for prefix matches - all without CPU involvement!
+// checks for prefix matches, and checks against bloom filter for funded addresses
 __kernel void generate_addresses_full(
     __global uchar* found_addresses,  // Output: [key_bytes (32)][address_str (64)]
     __global int* found_count,
@@ -415,7 +415,10 @@ __kernel void generate_addresses_full(
     unsigned int batch_size,
     __global char* prefix,
     int prefix_len,
-    unsigned int max_addresses
+    unsigned int max_addresses,
+    __global uchar* bloom_filter,    // Bloom filter for funded addresses
+    unsigned int filter_size,         // Bloom filter size in bytes
+    unsigned int check_balance        // Whether to check balance (1=yes, 0=no)
 ) {
     int gid = get_global_id(0);
 
@@ -447,16 +450,28 @@ __kernel void generate_addresses_full(
     base58_encode_local(hash20, 0x00, address);
 
     // Check for prefix match
-    bool match = false;
+    bool prefix_match = false;
     if (prefix_len > 0) {
-        match = true;
+        prefix_match = true;
         for (int i = 0; i < prefix_len; i++) {
             if (address[i] != prefix[i]) {
-                match = false;
+                prefix_match = false;
                 break;
             }
         }
     }
+
+    // Check bloom filter for funded address match
+    bool might_be_funded = false;
+    if (check_balance && bloom_filter != NULL && filter_size > 0) {
+        uint3 addr_hash = (uint3)(hash20[0] | (hash20[1] << 8) | (hash20[2] << 16),
+                                   hash20[3] | (hash20[4] << 8) | (hash20[5] << 16),
+                                   hash20[6] | (hash20[7] << 8) | (hash20[8] << 16));
+        might_be_funded = bloom_might_contain(bloom_filter, filter_size, addr_hash);
+    }
+
+    // Match if: prefix matches OR might be funded (bloom filter)
+    bool match = prefix_match || might_be_funded;
 
     // If match, write to results
     if (match) {
@@ -478,6 +493,9 @@ __kernel void generate_addresses_full(
                 addr_dest[i] = address[i];
                 if (address[i] == '\0') break;
             }
+
+            // Store bloom filter match flag (offset 96)
+            dest[96] = might_be_funded ? 1 : 0;
         }
     }
 }
