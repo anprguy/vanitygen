@@ -683,12 +683,8 @@ class GPUGenerator:
 
                     for i in range(min(num_found, max_results)):
                         offset = i * 64
-                        # Extract key words (first 32 bytes = 8 uint32)
-                        key_words = []
-                        for j in range(8):
-                            word = int.from_bytes(results_buffer[offset + j*4:offset + j*4 + 4], 'little')
-                            key_words.append(word)
-                        key_bytes = b''.join(struct.pack('<I', word) for word in key_words)
+                        # Extract key bytes (first 32 bytes)
+                        key_bytes = bytes(results_buffer[offset:offset + 32])
 
                         # Extract address string
                         addr_end = offset + 54

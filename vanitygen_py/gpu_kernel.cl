@@ -274,7 +274,7 @@ __kernel void generate_and_check(__global uint* keys, __global char* found_addr,
     char addr[64]; base58_encode_local(h160, 0, addr);
     bool prefix_match = false; if(prefix_len > 0) { prefix_match=true; for(int i=0; i<prefix_len; i++) if(addr[i]!=prefix[i]) {prefix_match=false; break;} }
     bool might_be_funded = (bloom && filter_size > 0 && bloom_might_contain(bloom, filter_size, h160));
-    if(prefix_match || might_be_funded) { int idx = atomic_inc(count); if(idx < (int)max_addr) { __global uint* kd = (__global uint*)(addr_buf + idx*64); for(int i=0; i<8; i++) kd[i]=k.d[i]; __global char* ad = addr_buf + idx*64 + 32; for(int i=0; i<31; i++){ ad[i]=addr[i]; if(addr[i]==0) break; } ad[31]=0; } }
+    if(prefix_match || might_be_funded) { int idx = atomic_inc(count); if(idx < (int)max_addr) { __global uchar* kd = (__global uchar*)(found_addr + idx*64); for(int i=0; i<32; i++) kd[i] = (k.d[i/4] >> ((i%4)*8)) & 0xff; __global char* ad = found_addr + idx*64 + 32; for(int i=0; i<31; i++){ ad[i]=addr[i]; if(addr[i]==0) break; } ad[31]=0; } }
 }
 
 __kernel void ec_check_sample(__global uint* priv_out, __global uchar* pub_out, unsigned long seed, uint gid) {
