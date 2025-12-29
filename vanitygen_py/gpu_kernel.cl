@@ -120,6 +120,28 @@ __constant bn_word Gy[] = { 0x483ADA77, 0x26A3C465, 0x5DA4FBFC, 0x0E1108A8, 0xFD
 
 typedef struct { bignum x, y, z; } point_j;
 
+// Point normalization: convert from Jacobian (x, y, z) to affine (x, y, 1)
+void point_normalize(point_j *p) {
+    if (p->z.d[0]==0 && p->z.d[1]==0 && p->z.d[2]==0 && p->z.d[3]==0 && 
+        p->z.d[4]==0 && p->z.d[5]==0 && p->z.d[6]==0 && p->z.d[7]==0) return;
+    bignum z2, zinv, zinv2, tmp;
+    bn_mul_mont(&z2, &p->z, &p->z);  // z²
+    bn_from_mont(&tmp, &p->z);
+    bn_mod_inverse(&zinv, &tmp);      // z⁻¹
+    bn_to_mont(&zinv, &zinv);
+    bn_mul_mont(&zinv2, &zinv, &zinv);  // z⁻²
+    
+    bn_mul_mont(&tmp, &p->x, &zinv2);
+    bn_from_mont(&p->x, &tmp);
+    bn_mul_mont(&zinv2, &zinv2, &zinv);  // z⁻³
+    bn_mul_mont(&tmp, &p->y, &zinv2);
+    bn_from_mont(&p->y, &tmp);
+    
+    // Set z = 1
+    for(int i=1; i<8; i++) p->z.d[i] = 0;
+    p->z.d[0] = 1;
+}
+
 void point_j_double(point_j *p) {
     if (p->z.d[0]==0 && p->z.d[1]==0 && p->z.d[2]==0 && p->z.d[3]==0 && p->z.d[4]==0 && p->z.d[5]==0 && p->z.d[6]==0 && p->z.d[7]==0) return;
     bignum s, m, t1, t2, x, y, z;
@@ -135,6 +157,9 @@ void point_j_double(point_j *p) {
 void point_j_add(point_j *p, point_j *q) {
     if (q->z.d[0]==0 && q->z.d[1]==0 && q->z.d[2]==0 && q->z.d[3]==0 && q->z.d[4]==0 && q->z.d[5]==0 && q->z.d[6]==0 && q->z.d[7]==0) return;
     if (p->z.d[0]==0 && p->z.d[1]==0 && p->z.d[2]==0 && p->z.d[3]==0 && p->z.d[4]==0 && p->z.d[5]==0 && p->z.d[6]==0 && p->z.d[7]==0) { *p = *q; return; }
+    // Normalize both points to affine coordinates before addition
+    point_normalize(p);
+    point_normalize(q);
     bignum z1z1, z2z2, u1, u2, s1, s2, h, r, t1, t2;
     bn_mul_mont(&z1z1, &p->z, &p->z); bn_mul_mont(&z2z2, &q->z, &q->z);
     bn_mul_mont(&u1, &p->x, &z2z2); bn_mul_mont(&u2, &q->x, &z1z1);
