@@ -75,9 +75,17 @@ uint bloom_hash(uint3 data, uint seed, uint m) {
 
 // Check if address matches bloom filter (might be a match)
 bool bloom_might_contain(__global uchar* bloom_filter, uint filter_size, uint3 addr_hash) {
+    uint filter_bits = filter_size * 8;
+    
     for (uint i = 0; i < BLOOM_HASH_COUNT; i++) {
-        uint bit_idx = bloom_hash(addr_hash, i, filter_size * 8);
-        if (!bloom_filter[bit_idx / 8]) return false;
+        uint bit_idx = bloom_hash(addr_hash, i, filter_bits);
+        uint byte_idx = bit_idx / 8;
+        uint bit_offset = bit_idx % 8;
+        
+        // Check the specific bit, not the whole byte
+        if (!(bloom_filter[byte_idx] & (1 << bit_offset))) {
+            return false;
+        }
     }
     return true;
 }
