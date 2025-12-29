@@ -1014,7 +1014,7 @@ class GPUGenerator:
         self.pause_event.clear()
         self.paused = False
         self.stats_counter = 0
-        self.rng_seed = int(time.time())
+        self.rng_seed = struct.unpack('<Q', os.urandom(8))[0]
 
         # Clear result queue
         try:

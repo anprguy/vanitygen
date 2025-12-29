@@ -58,18 +58,34 @@ int bn_ucmp_ge_c(bignum *a, __constant bn_word *b) {
 void bn_mod_add(bignum *r, bignum *a, bignum *b) { if (bn_uadd(r, a, b) || bn_ucmp_ge_c(r, modulus)) bn_usub_c(r, r, modulus); }
 void bn_mod_sub(bignum *r, bignum *a, bignum *b) { if (bn_usub(r, a, b)) bn_uadd_c(r, r, modulus); }
 
+// Montgomery multiplication
+#define bn_mul_add_word(r, a, w, c) do { \
+    ulong t = (ulong)(a) * (w) + (r) + (c); \
+    (r) = (uint)t; \
+    (c) = t >> 32; \
+} while (0)
+
 void bn_mul_mont(bignum *r, bignum *a, bignum *b) {
-    uint t[16] = {0};
+    uint t[9] = {0};
+    uint tea = 0;
     for (int i = 0; i < 8; i++) {
         ulong c = 0;
-        for (int j = 0; j < 8; j++) { ulong v = (ulong)a->d[j] * b->d[i] + t[j] + c; t[j] = (uint)v; c = v >> 32; }
+        for (int j = 0; j < 8; j++) bn_mul_add_word(t[j], a->d[j], b->d[i], c);
+        uint m_carry = (uint)c;
         uint m = t[0] * mont_n0;
-        ulong v = (ulong)m * modulus[0] + t[0]; c = v >> 32;
-        for (int j = 1; j < 8; j++) { v = (ulong)m * modulus[j] + t[j] + c; t[j-1] = (uint)v; c = v >> 32; }
-        t[7] = (uint)((ulong)t[8] + c);
+        c = 0;
+        bn_mul_add_word(t[0], modulus[0], m, c);
+        for (int j = 1; j < 8; j++) {
+            bn_mul_add_word(t[j], modulus[j], m, c);
+            t[j-1] = t[j];
+        }
+        t[7] = m_carry + (uint)c + tea;
+        tea = (t[7] < tea || (t[7] == tea && c > 0)) ? 1 : 0; // Very simplified carry handling
     }
-    for (int i = 0; i < 8; i++) r->d[i] = t[i];
-    if (bn_ucmp_ge_c(r, modulus)) bn_usub_c(r, r, modulus);
+    // Final reduction
+    bignum res; for(int i=0; i<8; i++) res.d[i] = t[i];
+    if (tea || bn_ucmp_ge_c(&res, modulus)) bn_usub_c(&res, &res, modulus);
+    *r = res;
 }
 
 void bn_mod_inverse(bignum *r, bignum *n) {
@@ -162,7 +178,7 @@ void sha256_block(uint *out, uint *in) {
 }
 
 __constant uint r_iv[]={0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0}, r_k[]={0,0x5a827999,0x6ed9eba1,0x8f1bbcdc,0xa953fd4e}, r_kp[]={0x50a28be6,0x5c4dd124,0x6d703ef3,0x7a6d76e9,0};
-__constant uchar r_ws[]={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,7,4,13,1,10,6,15,3,12,0,9,5,2,14,11,8,3,10,14,4,9,15,8,1,2,7,0,6,13,11,5,12,1,9,11,10,0,8,12,4,13,3,7,15,14,5,6,2,4,0,5,9,7,12,2,10,14,1,3,8,11,6,15,13}, r_wsp[]={5,14,7,0,9,2,11,4,13,6,15,8,1,10,3,12,6,11,3,7,0,13,5,10,14,15,8,12,4,9,1,2,15,5,1,3,7,14,6,9,11,8,12,2,10,0,4,13,8,6,4,1,3,11,15,0,5,12,2,13,9,7,10,14,12,15,10,4,1,5,8,7,6,2,13,14,0,3,9,11}, r_rl[]={11,14,15,12,5,8,7,9,11,13,14,15,6,7,9,8,7,6,8,13,11,9,7,15,7,12,15,9,11,7,13,12,11,13,6,7,14,9,13,15,14,8,13,6,5,12,7,5,11,12,14,15,14,15,9,8,9,14,5,6,8,6,5,12,9,15,5,11,6,8,13,12,5,12,13,14,11,8,5,6}, r_rlp[]={8,9,9,11,13,15,15,5,7,7,8,11,14,14,12,6,9,13,15,7,12,8,9,11,7,7,12,7,6,15,13,11,9,7,15,11,8,6,6,14,12,13,5,14,13,13,7,5,15,5,8,11,14,14,6,14,6,9,12,9,12,5,15,8,8,5,12,9,12,5,14,6,8,13,6,5,15,13,11,11};
+__constant uchar r_ws[]={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,7,4,13,1,10,6,15,3,12,0,9,5,2,14,11,8,3,10,14,4,9,15,8,1,2,7,0,6,13,11,5,12,1,9,11,10,0,8,12,4,13,3,7,15,14,5,6,2,4,0,5,9,7,12,2,10,14,1,3,8,11,6,15,13}, r_wsp[]={5,14,7,0,9,2,11,4,13,6,15,8,1,10,3,12,6,11,3,7,0,13,5,10,14,15,8,12,4,9,1,2,15,5,1,3,7,14,6,9,11,8,12,2,10,0,4,13,8,6,4,1,3,11,15,0,5,12,2,13,9,7,10,14,12,15,10,4,1,5,8,7,6,2,13,14,0,3,9,11};
 uint rf(int i,uint x,uint y,uint z){if(i<16)return x^y^z;if(i<32)return(x&y)|(~x&z);if(i<48)return(x|~y)^z;if(i<64)return(x&z)|(y&~z);return x^(y|~z);}
 uint rfp(int i,uint x,uint y,uint z){if(i<16)return x^(y|~z);if(i<32)return(x&z)|(y&~z);if(i<48)return(x|~y)^z;if(i<64)return(x&y)|(~x&z);return x^y^z;}
 void ripemd160_block(uint *out, uint *in) {
@@ -205,7 +221,7 @@ int binary_search_hash160(__global uchar* a, uint n, uchar* t) {
 // Kernels
 __kernel void generate_addresses_full(__global uchar* found, __global int* count, unsigned long seed, uint batch, __global char* prefix, int prefix_len, uint max_addr, __global uchar* bloom, uint filter_size, uint check_balance) {
     int gid = get_global_id(0); if (gid >= batch) return;
-    unsigned int st = (uint)seed + gid; bignum k; for (int i=0; i<8; i++) { st = st*1103515245+12345; k.d[i]=st; }
+    unsigned int st = (uint)seed ^ gid; bignum k; for (int i=0; i<8; i++) { st = st*1103515245+12345; uint s=st; s^=s<<13; s^=s>>17; s^=s<<5; k.d[i]=s; }
     point_j res; scalar_mult_g(&res, &k);
     if (res.z.d[0]==0 && res.z.d[1]==0 && res.z.d[2]==0 && res.z.d[3]==0 && res.z.d[4]==0 && res.z.d[5]==0 && res.z.d[6]==0 && res.z.d[7]==0) return;
     bignum zinv, zinv2, x, y, tmp; bn_from_mont(&tmp, &res.z); bn_mod_inverse(&zinv, &tmp); bn_to_mont(&zinv, &zinv);
@@ -222,7 +238,7 @@ __kernel void generate_addresses_full(__global uchar* found, __global int* count
 
 __kernel void generate_addresses_full_exact(__global uchar* found, __global int* count, unsigned long seed, uint batch, __global char* prefix, int prefix_len, uint max_addr, __global uchar* addr_list, uint list_count, uint check_addr) {
     int gid = get_global_id(0); if (gid >= batch) return;
-    unsigned int st = (uint)seed + gid; bignum k; for (int i=0; i<8; i++) { st = st*1103515245+12345; k.d[i]=st; }
+    unsigned int st = (uint)seed ^ gid; bignum k; for (int i=0; i<8; i++) { st = st*1103515245+12345; uint s=st; s^=s<<13; s^=s>>17; s^=s<<5; k.d[i]=s; }
     point_j res; scalar_mult_g(&res, &k);
     if (res.z.d[0]==0 && res.z.d[1]==0 && res.z.d[2]==0 && res.z.d[3]==0 && res.z.d[4]==0 && res.z.d[5]==0 && res.z.d[6]==0 && res.z.d[7]==0) return;
     bignum zinv, zinv2, x, y, tmp; bn_from_mont(&tmp, &res.z); bn_mod_inverse(&zinv, &tmp); bn_to_mont(&zinv, &zinv);
@@ -239,12 +255,12 @@ __kernel void generate_addresses_full_exact(__global uchar* found, __global int*
 
 __kernel void generate_private_keys(__global uint* out, unsigned long seed, uint batch) {
     int gid = get_global_id(0); if (gid >= batch) return;
-    unsigned int st = (uint)seed + gid; for (int i=0; i<8; i++) { st = st*1103515245+12345; out[gid*8+i]=st; }
+    unsigned int st = (uint)seed ^ gid; for (int i=0; i<8; i++) { st = st*1103515245+12345; uint s=st; s^=s<<13; s^=s>>17; s^=s<<5; out[gid*8+i]=s; }
 }
 
 __kernel void generate_and_check(__global uint* keys, __global char* found_addr, __global int* count, unsigned long seed, uint batch, __global uchar* bloom, uint filter_size, __global char* prefix, int prefix_len, __global char* addr_buf, uint max_addr) {
     int gid = get_global_id(0); if (gid >= batch) return;
-    unsigned int st = (uint)seed + gid; bignum k; for (int i=0; i<8; i++) { st = st*1103515245+12345; k.d[i]=st; keys[gid*8+i]=st; }
+    unsigned int st = (uint)seed ^ gid; bignum k; for (int i=0; i<8; i++) { st = st*1103515245+12345; uint s=st; s^=s<<13; s^=s>>17; s^=s<<5; k.d[i]=s; keys[gid*8+i]=s; }
     point_j res; scalar_mult_g(&res, &k);
     if (res.z.d[0]==0 && res.z.d[1]==0 && res.z.d[2]==0 && res.z.d[3]==0 && res.z.d[4]==0 && res.z.d[5]==0 && res.z.d[6]==0 && res.z.d[7]==0) return;
     bignum zinv, zinv2, x, y, tmp; bn_from_mont(&tmp, &res.z); bn_mod_inverse(&zinv, &tmp); bn_to_mont(&zinv, &zinv);
