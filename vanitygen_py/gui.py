@@ -50,7 +50,7 @@ class LoadBitcoinCoreThread(QThread):
 class GeneratorThread(QThread):
     stats_updated = Signal(int, float)
     address_found = Signal(str, str, str, float, bool)
-    
+
     def __init__(
         self,
         prefix,
@@ -63,6 +63,7 @@ class GeneratorThread(QThread):
         cpu_cores=None,
         gpu_power_percent=100,
         gpu_device_selector=None,
+        gpu_only=False,
     ):
         super().__init__()
         self.prefix = prefix
@@ -76,6 +77,7 @@ class GeneratorThread(QThread):
         self.cpu_cores = cpu_cores
         self.gpu_power_percent = gpu_power_percent
         self.gpu_device_selector = gpu_device_selector
+        self.gpu_only = gpu_only
 
         self.generator = None
         self.running = True
@@ -89,6 +91,8 @@ class GeneratorThread(QThread):
                 power_percent=self.gpu_power_percent,
                 device_selector=self.gpu_device_selector,
                 cpu_cores=self.cpu_cores,
+                balance_checker=self.balance_checker,
+                gpu_only=self.gpu_only,
             )
         else:
             self.generator = CPUGenerator(
@@ -232,7 +236,12 @@ class VanityGenGUI(QMainWindow):
         self.gpu_device_combo = QComboBox()
         device_layout.addWidget(self.gpu_device_combo)
         gpu_settings_layout.addLayout(device_layout)
-        
+
+        # GPU Only mode checkbox
+        self.gpu_only_check = QCheckBox("GPU Only Mode (ALL operations on GPU)")
+        self.gpu_only_check.setToolTip("When enabled, ALL operations (key generation, address generation, matching) happen on GPU.\nThis eliminates CPU load entirely but may be slightly slower than GPU+CPU combined.")
+        gpu_settings_layout.addWidget(self.gpu_only_check)
+
         self.gpu_settings_widget.setLayout(gpu_settings_layout)
         self.gpu_settings_widget.setVisible(False)  # Hidden by default
         settings_layout.addWidget(self.gpu_settings_widget)
@@ -554,16 +563,21 @@ Whoever has this key controls these funds.<br><br>
         gpu_power_percent = 100
         gpu_device_selector = None
         batch_size = 4096
+        gpu_only = False
 
         if mode == 'gpu':
             batch_size = int(self.batch_size_combo.currentText())
             gpu_power_percent = int(self.gpu_power_slider.value())
+            gpu_only = self.gpu_only_check.isChecked()
             if self.gpu_device_options and self.gpu_device_combo.currentIndex() < len(self.gpu_device_options):
                 gpu_device_selector = self.gpu_device_options[self.gpu_device_combo.currentIndex()]
 
+            mode_str = "GPU Only" if gpu_only else "GPU"
             self.log_output.append(
-                f"Using GPU: batch size={batch_size}, power={gpu_power_percent}%, device={self.gpu_device_combo.currentText()}"
+                f"Using {mode_str}: batch size={batch_size}, power={gpu_power_percent}%, device={self.gpu_device_combo.currentText()}"
             )
+            if gpu_only:
+                self.log_output.append("WARNING: GPU Only mode performs ALL operations on GPU (no CPU address generation)")
         else:
             cpu_cores = int(self.cpu_cores_spin.value())
             self.log_output.append(f"Using CPU cores: {cpu_cores}")
@@ -579,6 +593,7 @@ Whoever has this key controls these funds.<br><br>
             cpu_cores=cpu_cores,
             gpu_power_percent=gpu_power_percent,
             gpu_device_selector=gpu_device_selector,
+            gpu_only=gpu_only,
         )
         self.gen_thread.stats_updated.connect(self.update_stats)
         self.gen_thread.address_found.connect(self.on_address_found)

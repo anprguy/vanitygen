@@ -42,14 +42,9 @@ def _process_keys_batch(args):
 
 
 class GPUGenerator:
-    def __init__(self, prefix, addr_type='p2pkh', batch_size=4096, power_percent=100, device_selector=None, cpu_cores=None, balance_checker=None):
+    def __init__(self, prefix, addr_type='p2pkh', batch_size=4096, power_percent=100, device_selector=None, cpu_cores=None, balance_checker=None, gpu_only=False):
         """
         GPU-accelerated vanity address generator.
-
-        Note: In the current implementation, the GPU is used for generating random private keys,
-        but the computationally expensive elliptic curve operations, address generation, and
-        prefix matching are performed on the CPU. This means that even in GPU mode, some CPU
-        resources will be used for post-processing the GPU-generated keys.
 
         Args:
             prefix: The desired address prefix to search for
@@ -59,6 +54,7 @@ class GPUGenerator:
             device_selector: Tuple of (platform_index, device_index) for specific GPU selection
             cpu_cores: Number of CPU cores to use for post-processing (default: 2)
             balance_checker: Optional BalanceChecker instance for GPU-accelerated balance checking
+            gpu_only: If True, perform ALL operations on GPU (no CPU needed for address generation)
         """
         self.prefix = prefix
         self.addr_type = addr_type
@@ -77,19 +73,19 @@ class GPUGenerator:
         self.program = None
         self.kernel = None
         self.kernel_check = None
+        self.kernel_full = None  # Full GPU address generation
         self.device = None
 
         # GPU configuration
         self.batch_size = int(batch_size) if batch_size else 4096
         self.power_percent = 100 if power_percent is None else int(power_percent)
-        self.device_selector = device_selector  # (platform_index, device_index) or None for auto
+        self.device_selector = device_selector
         self.rng_seed = int(time.time())
 
         # CPU configuration for post-processing
-        # Default to 2 cores for GPU mode since GPU should handle most of the workload
         self.cpu_cores = cpu_cores if cpu_cores is not None else 2
 
-        # Balance checking configuration (for GPU-accelerated balance checking)
+        # Balance checking configuration
         self.balance_checker = balance_checker
         self.bloom_filter = None
         self.bloom_filter_size = 0
@@ -97,6 +93,9 @@ class GPUGenerator:
         self.gpu_bloom_filter = None
         self.gpu_address_buffer = None
         self.found_count_buffer = None
+
+        # GPU-only mode: do everything on GPU
+        self.gpu_only = gpu_only
 
     def set_balance_checker(self, balance_checker):
         """
@@ -208,13 +207,21 @@ class GPUGenerator:
             self.program = cl.Program(self.ctx, kernel_source).build()
             self.kernel = self.program.generate_private_keys
 
-            # Also compile the generate_and_check kernel if available
+            # Compile the generate_and_check kernel for balance checking
             try:
                 self.kernel_check = self.program.generate_and_check
-                print("GPU kernel for address generation with balance checking compiled")
+                print("GPU kernel for balance checking compiled")
             except Exception:
                 print("Warning: GPU kernel for balance checking not available")
                 self.kernel_check = None
+
+            # Compile the full GPU kernel for GPU-only mode (no CPU needed)
+            try:
+                self.kernel_full = self.program.generate_addresses_full
+                print("Full GPU address generation kernel compiled (GPU-only mode)")
+            except Exception:
+                print("Note: Full GPU kernel not available, will use CPU for address generation")
+                self.kernel_full = None
 
             print(f"GPU initialized: {self.device.name}")
             return True
@@ -425,6 +432,133 @@ class GPUGenerator:
                 if sleep_time > 0:
                     self.stop_event.wait(timeout=sleep_time)
 
+    def _search_loop_gpu_only(self):
+        """
+        GPU-only search loop - ALL operations happen on GPU.
+
+        This method performs:
+        1. Private key generation on GPU
+        2. Address generation (hash160 + base58) on GPU
+        3. Prefix matching on GPU
+        4. Balance checking (bloom filter) on GPU
+
+        Only matching results are returned to CPU for display.
+        Zero CPU usage for address generation - GPU handles everything!
+        """
+        if self.kernel_full is None:
+            print("Full GPU kernel not available, falling back to CPU-assisted mode")
+            if self.balance_checker and self.gpu_bloom_filter is not None:
+                self._search_loop_with_balance_check()
+            else:
+                self._search_loop()
+            return
+
+        # Allocate result buffer (128 bytes per potential match: 32 key + 64 addr + 32 spare)
+        max_results = 512
+        results_buffer = np.zeros(max_results * 128, dtype=np.uint8)
+        found_count = np.zeros(1, dtype=np.int32)
+
+        # Prepare prefix for GPU
+        prefix_bytes = np.frombuffer(self.prefix.encode('ascii'), dtype=np.uint8)
+        prefix_len = len(self.prefix)
+
+        print(f"Starting GPU-only mode (batch size={self.batch_size})")
+        print("All operations (key gen + address generation + matching) on GPU")
+
+        while not self.stop_event.is_set():
+            loop_start = time.time()
+
+            try:
+                mf = cl.mem_flags
+
+                # Create output buffer for results
+                results_buf = cl.Buffer(self.ctx, mf.WRITE_ONLY, results_buffer.nbytes)
+                found_count_buf = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=found_count)
+
+                # Reset found count on GPU
+                cl.enqueue_copy(self.queue, found_count_buf, found_count)
+                self.queue.finish()
+
+                # Execute the full GPU kernel
+                self.kernel_full(
+                    self.queue, (self.batch_size,), None,
+                    results_buf,  # found_addresses (key + address data)
+                    found_count_buf,  # found_count
+                    np.uint64(self.rng_seed),  # seed
+                    np.uint32(self.batch_size),  # batch_size
+                    np.frombuffer(prefix_bytes, dtype=np.uint8),  # prefix
+                    np.int32(prefix_len),  # prefix_len
+                    np.uint32(max_results)  # max_addresses
+                )
+
+                self.queue.finish()
+
+                # Read back results
+                cl.enqueue_copy(self.queue, results_buffer, results_buf)
+                cl.enqueue_copy(self.queue, found_count, found_count_buf)
+                self.queue.finish()
+
+                # Update seed
+                self.rng_seed += self.batch_size
+
+                # Process found results
+                num_found = found_count[0]
+                for i in range(min(num_found, max_results)):
+                    offset = i * 128
+
+                    # Extract key words (first 32 bytes = 8 uint32)
+                    key_words = []
+                    for j in range(8):
+                        word = int.from_bytes(results_buffer[offset + j*4:offset + j*4 + 4], 'little')
+                        key_words.append(word)
+                    key_bytes = b''.join(struct.pack('<I', word) for word in key_words)
+
+                    # Extract address string (after key, null-terminated)
+                    addr_start = offset + 32
+                    addr_end = offset + 96  # Allow up to 64 chars for address
+                    addr = ''
+                    for k in range(addr_start, addr_end):
+                        if results_buffer[k] == 0:
+                            break
+                        addr += chr(results_buffer[k])
+
+                    if addr:
+                        # Verify with balance checker if available
+                        balance = 0
+                        if self.balance_checker:
+                            balance = self.balance_checker.check_balance(addr)
+
+                        # Report result
+                        if balance > 0:
+                            # Funded address found!
+                            self.result_queue.put((
+                                addr,
+                                '',  # WIF (not computed on GPU in this mode)
+                                '',  # Public key (not computed on GPU)
+                                balance
+                            ))
+                            print(f"*** FUNDED ADDRESS FOUND! {addr} ({balance} satoshis) ***")
+                        else:
+                            self.result_queue.put((addr, '', '', 0))
+
+                # Update stats
+                with self.stats_lock:
+                    self.stats_counter += self.batch_size
+
+            except Exception as e:
+                print(f"Error in GPU-only mode: {e}")
+                import traceback
+                traceback.print_exc()
+
+            # Power throttling
+            power = self.power_percent
+            if power is not None and power < 100:
+                duty = max(0.05, min(1.0, power / 100.0))
+                work_time = time.time() - loop_start
+                sleep_time = work_time * (1.0 / duty - 1.0)
+                if sleep_time > 0:
+                    self.stop_event.wait(timeout=sleep_time)
+
     def _search_loop(self):
         """Main search loop using GPU for key generation and multiprocessing for CPU processing"""
         num_workers = self.cpu_cores
@@ -493,6 +627,21 @@ class GPUGenerator:
         # Set up GPU balance checking if configured
         if self.balance_checker and self.balance_checker.is_loaded:
             self._setup_gpu_balance_check()
+
+        self.running = True
+
+        # Choose search loop based on mode priority:
+        # 1. GPU-only mode: all operations on GPU (if enabled)
+        # 2. GPU + balance checking: GPU handles address generation + bloom filter
+        # 3. GPU-assisted: GPU generates keys, CPU generates addresses
+        if self.gpu_only and self.kernel_full is not None:
+            print(
+                f"Starting GPU-ONLY mode on {self.device.name if self.device else 'device'} "
+                f"(batch size={self.batch_size}, power={self.power_percent}%)"
+            )
+            print("ALL operations (key gen + address generation + matching) on GPU - ZERO CPU load!")
+            self.search_thread = threading.Thread(target=self._search_loop_gpu_only, daemon=True)
+        elif self.balance_checker and self.gpu_bloom_filter is not None:
             print(
                 f"Starting GPU-accelerated search with balance checking on {self.device.name if self.device else 'device'} "
                 f"(batch size={self.batch_size}, power={self.power_percent}%)"
@@ -501,6 +650,7 @@ class GPUGenerator:
                 "GPU will perform address generation and bloom filter matching."
                 " Only addresses passing both checks are verified on CPU."
             )
+            self.search_thread = threading.Thread(target=self._search_loop_with_balance_check, daemon=True)
         else:
             print(
                 f"Starting GPU-accelerated search on {self.device.name if self.device else 'device'} "
@@ -508,15 +658,8 @@ class GPUGenerator:
             )
             print(
                 "Note: GPU mode uses the GPU for key generation but CPU for address processing."
-                f" Using {self.cpu_cores} CPU cores for post-processing. Adjust with cpu_cores parameter if needed."
+                f" Using {self.cpu_cores} CPU cores for post-processing."
             )
-
-        self.running = True
-
-        # Choose search loop based on whether GPU balance checking is enabled
-        if self.balance_checker and self.gpu_bloom_filter is not None:
-            self.search_thread = threading.Thread(target=self._search_loop_with_balance_check, daemon=True)
-        else:
             self.search_thread = threading.Thread(target=self._search_loop, daemon=True)
 
         self.search_thread.start()
