@@ -458,19 +458,24 @@ class GPUGenerator:
         results_buffer = np.zeros(max_results * 128, dtype=np.uint8)
         found_count = np.zeros(1, dtype=np.int32)
 
-        # Prepare prefix for GPU
-        prefix_bytes = np.frombuffer(self.prefix.encode('ascii'), dtype=np.uint8)
-        prefix_len = len(self.prefix)
+        # Prepare prefix for GPU - create fixed-size buffer
+        prefix_bytes = self.prefix.encode('ascii')
+        prefix_len = len(prefix_bytes)
+        # Pad to 64 bytes for alignment
+        prefix_buffer = np.zeros(64, dtype=np.uint8)
+        prefix_buffer[:prefix_len] = np.frombuffer(prefix_bytes, dtype=np.uint8)
 
         print(f"Starting GPU-only mode (batch size={self.batch_size})")
         print("All operations (key gen + address generation + matching) on GPU")
+
+        # Allocate GPU buffer for prefix
+        mf = cl.mem_flags
+        gpu_prefix_buffer = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=prefix_buffer)
 
         while not self.stop_event.is_set():
             loop_start = time.time()
 
             try:
-                mf = cl.mem_flags
-
                 # Create output buffer for results
                 results_buf = cl.Buffer(self.ctx, mf.WRITE_ONLY, results_buffer.nbytes)
                 found_count_buf = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=found_count)
@@ -482,11 +487,11 @@ class GPUGenerator:
                 # Execute the full GPU kernel
                 self.kernel_full(
                     self.queue, (self.batch_size,), None,
-                    results_buf,  # found_addresses (key + address data)
-                    found_count_buf,  # found_count
+                    results_buf,       # found_addresses
+                    found_count_buf,   # found_count
                     np.uint64(self.rng_seed),  # seed
                     np.uint32(self.batch_size),  # batch_size
-                    np.frombuffer(prefix_bytes, dtype=np.uint8),  # prefix
+                    gpu_prefix_buffer,  # prefix (must be a cl.Buffer)
                     np.int32(prefix_len),  # prefix_len
                     np.uint32(max_results)  # max_addresses
                 )
