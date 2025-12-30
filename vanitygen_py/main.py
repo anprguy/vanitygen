@@ -73,10 +73,18 @@ def main():
                             else:
                                 # Vanity match result
                                 addr, wif, pubkey = result
+                                # Calculate hash160 from public key
+                                try:
+                                    from .crypto_utils import hash160
+                                    pubkey_bytes = bytes.fromhex(pubkey)
+                                    hash160_value = hash160(pubkey_bytes).hex()
+                                except Exception:
+                                    hash160_value = "N/A"
                                 print(f"\nMatch found!")
                                 print(f"Address: {addr}")
                                 print(f"Private Key: {wif}")
                                 print(f"Public Key: {pubkey}")
+                                print(f"Public Key Hash (Hash160): {hash160_value}")
 
                 except KeyboardInterrupt:
                     gen.stop()
@@ -109,10 +117,18 @@ def main():
 
                     while not gen.result_queue.empty():
                         addr, wif, pubkey = gen.result_queue.get()
+                        # Calculate hash160 from public key
+                        try:
+                            from .crypto_utils import hash160
+                            pubkey_bytes = bytes.fromhex(pubkey)
+                            hash160_value = hash160(pubkey_bytes).hex()
+                        except Exception:
+                            hash160_value = "N/A"
                         print(f"\nMatch found!")
                         print(f"Address: {addr}")
                         print(f"Private Key: {wif}")
                         print(f"Public Key: {pubkey}")
+                        print(f"Public Key Hash (Hash160): {hash160_value}")
             except KeyboardInterrupt:
                 gen.stop()
                 print("\nStopped.")

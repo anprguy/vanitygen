@@ -50,3 +50,8 @@ class BitcoinKey:
         if compressed:
             payload += b'\x01'
         return base58check_encode(128, payload)
+    
+    def get_hash160(self, compressed=True):
+        """Get the hash160 (RIPEMD160(SHA256(pubkey))) of the public key."""
+        pubkey = self.get_public_key(compressed)
+        return hash160(pubkey)
