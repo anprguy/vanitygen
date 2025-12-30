@@ -158,8 +158,24 @@ class GeneratorThread(QThread):
                         if ok:
                             msg = f"<span style='color: green; font-weight: bold;'>✓</span> #{check_index:,} EC check OK"
                         else:
-                            if isinstance(details, dict) and details.get('error'):
-                                msg = f"<span style='color: red; font-weight: bold;'>✗</span> #{check_index:,} EC check FAILED: {details['error']}"
+                            if isinstance(details, dict):
+                                if details.get('error'):
+                                    msg = f"<span style='color: red; font-weight: bold;'>✗</span> #{check_index:,} EC check FAILED: {details['error']}"
+                                elif details.get('cpu_addr') and details.get('gpu_addr'):
+                                    # Show detailed mismatch information
+                                    cpu_addr = details['cpu_addr']
+                                    gpu_addr = details['gpu_addr']
+                                    addr_match = "✓ MATCH" if cpu_addr == gpu_addr else "✗ DIFFER"
+                                    msg = f"<span style='color: red; font-weight: bold;'>✗</span> #{check_index:,} EC check FAILED<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;CPU pubkey: {details.get('cpu_pub', 'N/A')[:16]}...<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;GPU pubkey: {details.get('gpu_pub', 'N/A')[:16]}...<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;CPU address: {cpu_addr}<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;GPU address: {gpu_addr}<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;Addresses: <b>{addr_match}</b>"
+                                    if details.get('note'):
+                                        msg += f"<br>&nbsp;&nbsp;&nbsp;&nbsp;Note: {details['note']}"
+                                else:
+                                    msg = f"<span style='color: red; font-weight: bold;'>✗</span> #{check_index:,} EC check FAILED (details: {details})"
                             else:
                                 msg = f"<span style='color: red; font-weight: bold;'>✗</span> #{check_index:,} EC check FAILED"
                         self.ec_check_logged.emit(msg)
@@ -333,18 +349,29 @@ class VanityGenGUI(QMainWindow):
 
         self.balance_status_label = QLabel("Balance checking not active")
         # Address type tally labels (will be updated during generation)
+        # These show MATCHING addresses found, not total keys generated
         self.tally_widget = QWidget()
-        tally_layout = QHBoxLayout()
+        tally_layout = QVBoxLayout()
+        
+        tally_title = QLabel("<b>Matches Found (by address type):</b>")
+        tally_title.setToolTip("Number of addresses that matched your search criteria.\nThis is NOT the total keys checked - see Progress tab for that.")
+        tally_layout.addWidget(tally_title)
+        
+        counts_layout = QHBoxLayout()
         
         self.p2pkh_count_label = QLabel("P2PKH: 0")
-        tally_layout.addWidget(self.p2pkh_count_label)
+        self.p2pkh_count_label.setToolTip("Legacy addresses starting with '1'")
+        counts_layout.addWidget(self.p2pkh_count_label)
         
         self.p2wpkh_count_label = QLabel("P2WPKH: 0")
-        tally_layout.addWidget(self.p2wpkh_count_label)
+        self.p2wpkh_count_label.setToolTip("Native SegWit addresses starting with 'bc1q'")
+        counts_layout.addWidget(self.p2wpkh_count_label)
         
         self.p2sh_count_label = QLabel("P2SH: 0")
-        tally_layout.addWidget(self.p2sh_count_label)
+        self.p2sh_count_label.setToolTip("Nested SegWit addresses starting with '3'")
+        counts_layout.addWidget(self.p2sh_count_label)
         
+        tally_layout.addLayout(counts_layout)
         self.tally_widget.setLayout(tally_layout)
         settings_layout.addWidget(self.tally_widget)
         
@@ -415,6 +442,11 @@ class VanityGenGUI(QMainWindow):
         progress_layout.addWidget(status_container)
         
         self.stats_label = QLabel("Keys Searched: 0 | Speed: 0 keys/s")
+        self.stats_label.setToolTip(
+            "Keys Searched: Total number of keys generated and checked\n"
+            "This includes ALL keys, not just matches.\n"
+            "See Settings tab 'Matches Found' for the count of matching addresses."
+        )
         progress_layout.addWidget(self.stats_label)
         
         self.log_output = QTextEdit()
@@ -449,6 +481,17 @@ class VanityGenGUI(QMainWindow):
         # EC Checks Tab
         ec_checks_tab = QWidget()
         ec_checks_layout = QVBoxLayout()
+        
+        ec_info = QLabel(
+            "<b>EC Verification Checks</b><br>"
+            "These checks compare GPU-generated public keys with CPU-generated ones.<br>"
+            "<b>Important:</b> Results shown in the Results tab are always verified by CPU,<br>"
+            "so even if EC checks fail, your final results are guaranteed to be correct.<br>"
+            "EC check failures indicate the GPU EC implementation may have bugs."
+        )
+        ec_info.setWordWrap(True)
+        ec_info.setStyleSheet("padding: 10px; background-color: #f0f0f0; border: 1px solid #ccc;")
+        ec_checks_layout.addWidget(ec_info)
 
         self.ec_checks_output = QTextEdit()
         self.ec_checks_output.setReadOnly(True)
