@@ -531,6 +531,14 @@ class GPUGenerator:
                 if ok:
                     self.ec_check_queue.put((check_index, True, None))
                 else:
+                    # Generate address to verify end-to-end correctness
+                    cpu_addr = cpu_key.get_p2pkh_address(compressed=True)
+                    
+                    # Extract GPU-generated address for comparison
+                    from .crypto_utils import hash160, base58check_encode
+                    gpu_hash160 = hash160(gpu_pub)
+                    gpu_addr = base58check_encode(0, gpu_hash160)
+                    
                     self.ec_check_queue.put(
                         (
                             check_index,
@@ -539,6 +547,9 @@ class GPUGenerator:
                                 'privkey': priv_be.hex(),
                                 'cpu_pub': cpu_pub.hex(),
                                 'gpu_pub': gpu_pub.hex(),
+                                'cpu_addr': cpu_addr,
+                                'gpu_addr': gpu_addr,
+                                'note': 'Public keys differ but addresses may still match (check GPU EC implementation)',
                             },
                         )
                     )
