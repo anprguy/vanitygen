@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """
 COMPREHENSIVE GPU EC CORRECTNESS TEST
 
@@ -7,7 +8,10 @@ by comparing GPU-generated addresses with CPU-generated addresses
 for the same private keys.
 
 This is the CRITICAL test to verify GPU EC operations are correct.
+
+Compatible with Python 2.7 and Python 3.x
 """
+from __future__ import print_function
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vanitygen_py'))
@@ -67,19 +71,19 @@ def test_gpu_ec_correctness():
             # Fall back to first device
             device = platforms[0].get_devices()[0]
         
-        print(f"    Using device: {device.name}")
+        print("    Using device: {}".format(device.name))
         ctx = cl.Context([device])
         queue = cl.CommandQueue(ctx)
         
     except Exception as e:
-        print(f"ERROR: Failed to initialize OpenCL: {e}")
+        print("ERROR: Failed to initialize OpenCL: {}".format(e))
         return False
     
     # Load and compile GPU kernel
     print("[2] Loading GPU kernel...")
     kernel_path = os.path.join(os.path.dirname(__file__), 'vanitygen_py', 'gpu_kernel.cl')
     if not os.path.exists(kernel_path):
-        print(f"ERROR: Kernel not found at {kernel_path}")
+        print("ERROR: Kernel not found at {}".format(kernel_path))
         return False
     
     try:
@@ -88,12 +92,12 @@ def test_gpu_ec_correctness():
         program = cl.Program(ctx, kernel_source).build()
         print("    ✓ Kernel compiled successfully")
     except Exception as e:
-        print(f"ERROR: Failed to compile kernel: {e}")
+        print("ERROR: Failed to compile kernel: {}".format(e))
         return False
     
     # Test parameters
     num_tests = 100  # Test 100 addresses
-    print(f"\n[3] Testing {num_tests} random private keys...")
+    print("\n[3] Testing {} random private keys...".format(num_tests))
     print()
     
     # Generate test seed
@@ -148,10 +152,10 @@ def test_gpu_ec_correctness():
         queue.finish()
         
         num_found = found_count[0]
-        print(f"    ✓ GPU generated {num_found} addresses")
+        print("    ✓ GPU generated {} addresses".format(num_found))
         
     except Exception as e:
-        print(f"ERROR: GPU kernel failed: {e}")
+        print("ERROR: GPU kernel failed: {}".format(e))
         import traceback
         traceback.print_exc()
         return False
@@ -183,29 +187,46 @@ def test_gpu_ec_correctness():
         try:
             cpu_key = BitcoinKey(gpu_key_bytes)
             cpu_addr = cpu_key.get_p2pkh_address()
-            cpu_pub = cpu_key.get_public_key(compressed=True).hex()
+            cpu_pub_bytes = cpu_key.get_public_key(compressed=True)
+            # Convert to hex string (Python 2/3 compatible)
+            try:
+                cpu_pub = cpu_pub_bytes.hex()
+            except AttributeError:
+                cpu_pub = cpu_pub_bytes.encode('hex')
             
             # Compare
             if gpu_addr == cpu_addr:
                 matches += 1
                 if i < 5:  # Show first 5 matches
-                    print(f"    ✓ Match #{i+1}:")
-                    print(f"       Address: {gpu_addr}")
-                    print(f"       (GPU and CPU both generated same address)")
+                    print("    ✓ Match #{}:".format(i+1))
+                    print("       Address: {}".format(gpu_addr))
+                    print("       (GPU and CPU both generated same address)")
                     print()
             else:
+                # Convert private key to hex (Python 2/3 compatible)
+                try:
+                    priv_hex = gpu_key_bytes.hex()
+                except AttributeError:
+                    priv_hex = gpu_key_bytes.encode('hex')
+                    
                 mismatches.append({
                     'index': i,
-                    'private_key': gpu_key_bytes.hex(),
+                    'private_key': priv_hex,
                     'gpu_addr': gpu_addr,
                     'cpu_addr': cpu_addr,
                     'cpu_pub': cpu_pub
                 })
                 
         except Exception as e:
+            # Convert private key to hex (Python 2/3 compatible)
+            try:
+                priv_hex = gpu_key_bytes.hex()
+            except AttributeError:
+                priv_hex = gpu_key_bytes.encode('hex')
+                
             mismatches.append({
                 'index': i,
-                'private_key': gpu_key_bytes.hex(),
+                'private_key': priv_hex,
                 'error': str(e)
             })
     
@@ -215,9 +236,9 @@ def test_gpu_ec_correctness():
     print("TEST RESULTS")
     print("="*80)
     print()
-    print(f"Total addresses tested: {num_found}")
-    print(f"Matches (GPU == CPU):   {matches}")
-    print(f"Mismatches:             {len(mismatches)}")
+    print("Total addresses tested: {}".format(num_found))
+    print("Matches (GPU == CPU):   {}".format(matches))
+    print("Mismatches:             {}".format(len(mismatches)))
     print()
     
     if len(mismatches) == 0:
@@ -236,22 +257,22 @@ def test_gpu_ec_correctness():
         print("-" * 80)
         
         for m in mismatches[:10]:  # Show first 10 mismatches
-            print(f"\nMismatch #{m['index']+1}:")
-            print(f"  Private Key: {m.get('private_key', 'N/A')[:32]}...")
+            print("\nMismatch #{}:".format(m['index']+1))
+            print("  Private Key: {}...".format(m.get('private_key', 'N/A')[:32]))
             
             if 'error' in m:
-                print(f"  ERROR: {m['error']}")
+                print("  ERROR: {}".format(m['error']))
             else:
-                print(f"  GPU Address: {m.get('gpu_addr', 'N/A')}")
-                print(f"  CPU Address: {m.get('cpu_addr', 'N/A')}")
-                print(f"  CPU Pubkey:  {m.get('cpu_pub', 'N/A')[:32]}...")
+                print("  GPU Address: {}".format(m.get('gpu_addr', 'N/A')))
+                print("  CPU Address: {}".format(m.get('cpu_addr', 'N/A')))
+                print("  CPU Pubkey:  {}...".format(m.get('cpu_pub', 'N/A')[:32]))
                 
                 if m.get('gpu_addr') and m.get('cpu_addr'):
                     # Analyze difference
                     if m['gpu_addr'][0] != m['cpu_addr'][0]:
-                        print(f"  → First character differs (version byte issue?)")
+                        print("  → First character differs (version byte issue?)")
                     else:
-                        print(f"  → Same version, different hash (EC or hash issue)")
+                        print("  → Same version, different hash (EC or hash issue)")
         
         print()
         print("POSSIBLE CAUSES:")
@@ -279,7 +300,7 @@ if __name__ == "__main__":
         print("\nTest interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\nFATAL ERROR: {e}")
+        print("\nFATAL ERROR: {}".format(e))
         import traceback
         traceback.print_exc()
         sys.exit(1)
