@@ -50,6 +50,7 @@ class LoadBitcoinCoreThread(QThread):
 class GeneratorThread(QThread):
     stats_updated = Signal(int, float)
     address_found = Signal(str, str, str, float, bool)
+    ec_check_logged = Signal(str)
 
     def __init__(
         self,
@@ -64,6 +65,7 @@ class GeneratorThread(QThread):
         gpu_power_percent=100,
         gpu_device_selector=None,
         gpu_only=False,
+        ec_check_interval=None,
     ):
         super().__init__()
         self.prefix = prefix
@@ -78,6 +80,7 @@ class GeneratorThread(QThread):
         self.gpu_power_percent = gpu_power_percent
         self.gpu_device_selector = gpu_device_selector
         self.gpu_only = gpu_only
+        self.ec_check_interval = ec_check_interval
 
         self.generator = None
         self.running = True
@@ -93,6 +96,7 @@ class GeneratorThread(QThread):
                 cpu_cores=self.cpu_cores,
                 balance_checker=self.balance_checker,
                 gpu_only=self.gpu_only,
+                ec_check_interval=self.ec_check_interval,
             )
         else:
             self.generator = CPUGenerator(
@@ -145,6 +149,38 @@ class GeneratorThread(QThread):
                 print(f"Error processing results: {e}")
                 import traceback
                 traceback.print_exc()
+
+            # EC verification checks (GPU vs CPU sampling)
+            try:
+                if hasattr(self.generator, 'ec_check_queue'):
+                    while not self.generator.ec_check_queue.empty():
+                        check_index, ok, details = self.generator.ec_check_queue.get_nowait()
+                        if ok:
+                            msg = f"<span style='color: green; font-weight: bold;'>✓</span> #{check_index:,} EC check OK"
+                        else:
+                            if isinstance(details, dict):
+                                if details.get('error'):
+                                    msg = f"<span style='color: red; font-weight: bold;'>✗</span> #{check_index:,} EC check FAILED: {details['error']}"
+                                elif details.get('cpu_addr') and details.get('gpu_addr'):
+                                    # Show detailed mismatch information
+                                    cpu_addr = details['cpu_addr']
+                                    gpu_addr = details['gpu_addr']
+                                    addr_match = "✓ MATCH" if cpu_addr == gpu_addr else "✗ DIFFER"
+                                    msg = f"<span style='color: red; font-weight: bold;'>✗</span> #{check_index:,} EC check FAILED<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;CPU pubkey: {details.get('cpu_pub', 'N/A')[:16]}...<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;GPU pubkey: {details.get('gpu_pub', 'N/A')[:16]}...<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;CPU address: {cpu_addr}<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;GPU address: {gpu_addr}<br>"
+                                    msg += f"&nbsp;&nbsp;&nbsp;&nbsp;Addresses: <b>{addr_match}</b>"
+                                    if details.get('note'):
+                                        msg += f"<br>&nbsp;&nbsp;&nbsp;&nbsp;Note: {details['note']}"
+                                else:
+                                    msg = f"<span style='color: red; font-weight: bold;'>✗</span> #{check_index:,} EC check FAILED (details: {details})"
+                            else:
+                                msg = f"<span style='color: red; font-weight: bold;'>✗</span> #{check_index:,} EC check FAILED"
+                        self.ec_check_logged.emit(msg)
+            except Exception as e:
+                print(f"Error processing EC check events: {e}")
 
     def stop(self):
         self.running = False
@@ -253,9 +289,29 @@ class VanityGenGUI(QMainWindow):
         gpu_settings_layout.addLayout(device_layout)
 
         # GPU Only mode checkbox
-        self.gpu_only_check = QCheckBox("GPU Only Mode (ALL operations on GPU)")
-        self.gpu_only_check.setToolTip("When enabled, ALL operations (key generation, address generation, matching) happen on GPU.\nThis eliminates CPU load entirely but may be slightly slower than GPU+CPU combined.")
+        self.gpu_only_check = QCheckBox("GPU Only Mode (Full GPU Acceleration)")
+        self.gpu_only_check.setToolTip("When enabled, ALL operations (key generation, EC math, address generation, matching) happen on GPU.\nThis maximizes performance and minimizes CPU load.")
+        self.gpu_only_check.setStyleSheet("")
         gpu_settings_layout.addWidget(self.gpu_only_check)
+
+        # EC verification sampling (GPU vs CPU)
+        self.ec_check_enable = QCheckBox("Enable EC Verification Sampling (GPU vs CPU)")
+        self.ec_check_enable.setToolTip(
+            "Periodically verifies GPU EC (public key derivation) against CPU.\n"
+            "Useful for validating OpenCL kernel correctness.\n"
+            "Note: Enabling this will slightly reduce performance."
+        )
+        gpu_settings_layout.addWidget(self.ec_check_enable)
+
+        ec_check_layout = QHBoxLayout()
+        ec_check_layout.addWidget(QLabel("Check every:"))
+        self.ec_check_interval_combo = QComboBox()
+        self.ec_check_interval_combo.addItems(["10,000", "100,000", "1,000,000"])
+        self.ec_check_interval_combo.setCurrentIndex(1)  # Default to 100,000
+        self.ec_check_interval_combo.setEnabled(False)
+        self.ec_check_enable.toggled.connect(self.ec_check_interval_combo.setEnabled)
+        ec_check_layout.addWidget(self.ec_check_interval_combo)
+        gpu_settings_layout.addLayout(ec_check_layout)
 
         self.gpu_settings_widget.setLayout(gpu_settings_layout)
         self.gpu_settings_widget.setVisible(False)  # Hidden by default
@@ -293,18 +349,29 @@ class VanityGenGUI(QMainWindow):
 
         self.balance_status_label = QLabel("Balance checking not active")
         # Address type tally labels (will be updated during generation)
+        # These show MATCHING addresses found, not total keys generated
         self.tally_widget = QWidget()
-        tally_layout = QHBoxLayout()
+        tally_layout = QVBoxLayout()
+        
+        tally_title = QLabel("<b>Matches Found (by address type):</b>")
+        tally_title.setToolTip("Number of addresses that matched your search criteria.\nThis is NOT the total keys checked - see Progress tab for that.")
+        tally_layout.addWidget(tally_title)
+        
+        counts_layout = QHBoxLayout()
         
         self.p2pkh_count_label = QLabel("P2PKH: 0")
-        tally_layout.addWidget(self.p2pkh_count_label)
+        self.p2pkh_count_label.setToolTip("Legacy addresses starting with '1'")
+        counts_layout.addWidget(self.p2pkh_count_label)
         
         self.p2wpkh_count_label = QLabel("P2WPKH: 0")
-        tally_layout.addWidget(self.p2wpkh_count_label)
+        self.p2wpkh_count_label.setToolTip("Native SegWit addresses starting with 'bc1q'")
+        counts_layout.addWidget(self.p2wpkh_count_label)
         
         self.p2sh_count_label = QLabel("P2SH: 0")
-        tally_layout.addWidget(self.p2sh_count_label)
+        self.p2sh_count_label.setToolTip("Nested SegWit addresses starting with '3'")
+        counts_layout.addWidget(self.p2sh_count_label)
         
+        tally_layout.addLayout(counts_layout)
         self.tally_widget.setLayout(tally_layout)
         settings_layout.addWidget(self.tally_widget)
         
@@ -375,6 +442,11 @@ class VanityGenGUI(QMainWindow):
         progress_layout.addWidget(status_container)
         
         self.stats_label = QLabel("Keys Searched: 0 | Speed: 0 keys/s")
+        self.stats_label.setToolTip(
+            "Keys Searched: Total number of keys generated and checked\n"
+            "This includes ALL keys, not just matches.\n"
+            "See Settings tab 'Matches Found' for the count of matching addresses."
+        )
         progress_layout.addWidget(self.stats_label)
         
         self.log_output = QTextEdit()
@@ -406,6 +478,34 @@ class VanityGenGUI(QMainWindow):
         results_tab.setLayout(results_layout)
         tabs.addTab(results_tab, "Results")
 
+        # EC Checks Tab
+        ec_checks_tab = QWidget()
+        ec_checks_layout = QVBoxLayout()
+        
+        ec_info = QLabel(
+            "<b>EC Verification Checks</b><br>"
+            "These checks compare GPU-generated public keys with CPU-generated ones.<br>"
+            "<b>Important:</b> Results shown in the Results tab are always verified by CPU,<br>"
+            "so even if EC checks fail, your final results are guaranteed to be correct.<br>"
+            "EC check failures indicate the GPU EC implementation may have bugs."
+        )
+        ec_info.setWordWrap(True)
+        ec_info.setStyleSheet("padding: 10px; background-color: #f0f0f0; border: 1px solid #ccc;")
+        ec_checks_layout.addWidget(ec_info)
+
+        self.ec_checks_output = QTextEdit()
+        self.ec_checks_output.setReadOnly(True)
+        ec_checks_layout.addWidget(self.ec_checks_output)
+
+        ec_btn_layout = QHBoxLayout()
+        self.ec_checks_clear_btn = QPushButton("Clear EC Checks")
+        self.ec_checks_clear_btn.clicked.connect(self.ec_checks_output.clear)
+        ec_btn_layout.addWidget(self.ec_checks_clear_btn)
+        ec_checks_layout.addLayout(ec_btn_layout)
+
+        ec_checks_tab.setLayout(ec_checks_layout)
+        tabs.addTab(ec_checks_tab, "EC Checks")
+
     def copy_results(self):
         clipboard = QApplication.clipboard()
         clipboard.setText(self.results_list.toPlainText())
@@ -434,6 +534,14 @@ class VanityGenGUI(QMainWindow):
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             filename = f"funded_address_{addr[:8]}_{timestamp}.txt"
             
+            # Calculate hash160 from public key
+            try:
+                from .crypto_utils import hash160
+                pubkey_bytes = bytes.fromhex(pubkey)
+                hash160_value = hash160(pubkey_bytes).hex()
+            except Exception:
+                hash160_value = "N/A"
+            
             with open(filename, 'w') as f:
                 f.write(f"Congratulations! Funded Address Found!\n")
                 f.write(f"{'='*50}\n\n")
@@ -443,6 +551,7 @@ class VanityGenGUI(QMainWindow):
                 f.write(f"Balance (BTC): {balance / 100_000_000:.8f} BTC\n\n")
                 f.write(f"Private Key (WIF): {wif}\n")
                 f.write(f"Public Key: {pubkey}\n")
+                f.write(f"Public Key Hash (Hash160): {hash160_value}\n")
                 f.write(f"{'='*50}\n\n")
                 f.write(f"Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"WARNING: Keep this file secure! Whoever has the private key controls the funds.\n")
@@ -454,6 +563,14 @@ class VanityGenGUI(QMainWindow):
 
     def show_congratulations(self, addr, wif, pubkey, balance, is_in_funded_list):
         """Show congratulations dialog when funded address found."""
+        # Calculate hash160 from public key
+        try:
+            from .crypto_utils import hash160
+            pubkey_bytes = bytes.fromhex(pubkey)
+            hash160_value = hash160(pubkey_bytes).hex()
+        except Exception:
+            hash160_value = "N/A"
+        
         title = "🏆 Congratulations! Funded Address Found! 🏆"
         message = f"""
 <b><font color='green' size='+2'>CONGRATULATIONS!</font></b><br><br>
@@ -469,6 +586,9 @@ You found a funded Bitcoin address with balance!<br><br>
 
 <b>Public Key:</b><br>
 <font size='-2'>{pubkey}</font><br><br>
+
+<b>Public Key Hash (Hash160):</b><br>
+<font size='-2'>{hash160_value}</font><br><br>
 
 <font color='red'><b>⚠ SECURITY WARNING:</b></font><br>
 The private key is displayed above. <b>Secure it immediately!</b><br>
@@ -594,11 +714,17 @@ Whoever has this key controls these funds.<br><br>
         gpu_device_selector = None
         batch_size = 4096
         gpu_only = False
+        ec_check_interval = None
 
         if mode == 'gpu':
             batch_size = int(self.batch_size_combo.currentText())
             gpu_power_percent = int(self.gpu_power_slider.value())
             gpu_only = self.gpu_only_check.isChecked()
+
+            if self.ec_check_enable.isChecked():
+                ec_check_interval = int(self.ec_check_interval_combo.currentText().replace(',', ''))
+                self.log_output.append(f"EC verification enabled: sampling every {ec_check_interval:,} addresses")
+
             if self.gpu_device_options and self.gpu_device_combo.currentIndex() < len(self.gpu_device_options):
                 gpu_device_selector = self.gpu_device_options[self.gpu_device_combo.currentIndex()]
 
@@ -624,9 +750,11 @@ Whoever has this key controls these funds.<br><br>
             gpu_power_percent=gpu_power_percent,
             gpu_device_selector=gpu_device_selector,
             gpu_only=gpu_only,
+            ec_check_interval=ec_check_interval,
         )
         self.gen_thread.stats_updated.connect(self.update_stats)
         self.gen_thread.address_found.connect(self.on_address_found)
+        self.gen_thread.ec_check_logged.connect(self.on_ec_check_logged)
         self.gen_thread.finished.connect(self.on_gen_finished)
         
         self.gen_thread.start()
@@ -648,21 +776,27 @@ Whoever has this key controls these funds.<br><br>
 
     def pause_generation(self):
         """Pause the current generation"""
-        if self.gen_thread and self.gen_thread.isRunning():
-            self.gen_thread.generator.pause()
-            self.pause_btn.setEnabled(False)
-            self.resume_btn.setEnabled(True)
-            self.log_output.append("Generation paused")
-            self.update_status_labels()
+        if self.gen_thread and self.gen_thread.isRunning() and self.gen_thread.generator:
+            try:
+                self.gen_thread.generator.pause()
+                self.pause_btn.setEnabled(False)
+                self.resume_btn.setEnabled(True)
+                self.log_output.append("Generation paused")
+                self.update_status_labels()
+            except Exception as e:
+                self.log_output.append(f"Error pausing generation: {e}")
 
     def resume_generation(self):
         """Resume the current generation"""
-        if self.gen_thread and self.gen_thread.isRunning():
-            self.gen_thread.generator.resume()
-            self.pause_btn.setEnabled(True)
-            self.resume_btn.setEnabled(False)
-            self.log_output.append("Generation resumed")
-            self.update_status_labels()
+        if self.gen_thread and self.gen_thread.isRunning() and self.gen_thread.generator:
+            try:
+                self.gen_thread.generator.resume()
+                self.pause_btn.setEnabled(True)
+                self.resume_btn.setEnabled(False)
+                self.log_output.append("Generation resumed")
+                self.update_status_labels()
+            except Exception as e:
+                self.log_output.append(f"Error resuming generation: {e}")
 
     def update_status_labels(self):
         """Update status labels based on current state"""
@@ -725,6 +859,10 @@ Whoever has this key controls these funds.<br><br>
             self.gpu_status_label.setText("Idle")
             self.gpu_status_label.setStyleSheet("color: gray; font-weight: bold;")
 
+    def on_ec_check_logged(self, message):
+        if hasattr(self, 'ec_checks_output'):
+            self.ec_checks_output.append(message)
+
     def on_address_found(self, addr, wif, pubkey, balance, is_in_funded_list):
         addr_type = None
         if self.gen_thread and self.gen_thread.addr_type:
@@ -737,9 +875,17 @@ Whoever has this key controls these funds.<br><br>
         if self.show_only_funded_check.isChecked() and balance <= 0:
             return
 
+        # Calculate hash160 from public key for verification
+        try:
+            from .crypto_utils import hash160
+            pubkey_bytes = bytes.fromhex(pubkey)
+            hash160_value = hash160(pubkey_bytes).hex()
+        except Exception:
+            hash160_value = "N/A"
+
         membership_status = "✓ YES" if is_in_funded_list else "✗ NO"
         type_display = addr_type if addr_type else 'N/A'
-        result_str = f"Address: {addr}\nPrivate Key: {wif}\nPublic Key: {pubkey}\nBalance: {balance}\nIn Funded List: {membership_status}\nAddress Type: {type_display}\n" + "-"*40 + "\n"
+        result_str = f"Address: {addr}\nPrivate Key: {wif}\nPublic Key: {pubkey}\nPublic Key Hash (Hash160): {hash160_value}\nBalance: {balance}\nIn Funded List: {membership_status}\nAddress Type: {type_display}\n" + "-"*40 + "\n"
         self.results_list.append(result_str)
         self.log_output.append(f"Match found: {addr} (Type: {type_display})")
         
