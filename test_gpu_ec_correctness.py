@@ -108,9 +108,13 @@ def test_gpu_ec_correctness():
     results_buffer = np.zeros(num_tests * 128, dtype=np.uint8)
     found_count = np.zeros(1, dtype=np.int32)
     
-    # Empty prefix (match all addresses)
+    # Use prefix "1" to match all P2PKH addresses
+    # All Bitcoin P2PKH addresses start with "1", so this will match everything
+    prefix_str = "1"
     prefix_buffer = np.zeros(64, dtype=np.uint8)
-    prefix_len = 0
+    for i, c in enumerate(prefix_str):
+        prefix_buffer[i] = ord(c)
+    prefix_len = len(prefix_str)
     
     # No balance checking (just generate addresses)
     dummy_bloom = np.zeros(1, dtype=np.uint8)
