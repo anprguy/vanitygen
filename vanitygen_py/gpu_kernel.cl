@@ -120,6 +120,90 @@ __constant bn_word Gy[] = { 0x483ADA77, 0x26A3C465, 0x5DA4FBFC, 0x0E1108A8, 0xFD
 
 typedef struct { bignum x, y, z; } point_j;
 
+// Optimized EC operations from calc_addrs.cl
+#define ACCESS_BUNDLE 1024
+#define ACCESS_STRIDE (ACCESS_BUNDLE/8)
+
+// Additional bignum operations needed for optimized EC
+void bn_lshift1(bignum *bn) {
+    for (int i = 7; i > 0; i--) bn->d[i] = (bn->d[i] << 1) | (bn->d[i-1] >> 31);
+    bn->d[0] <<= 1;
+}
+
+void bn_neg(bignum *n) {
+    int c = 1;
+    for (int i = 0; i < 8; i++) {
+        c = (n->d[i] = (~n->d[i]) + c) ? 0 : c;
+    }
+}
+
+// Optimized scalar multiplication using the new EC functions
+void scalar_mult_g_optimized(point_j *res, bignum *k) {
+    point_j base, curr;
+    for(int i=0; i<8; i++){
+        base.x.d[i]=Gx[i]; 
+        base.y.d[i]=Gy[i]; 
+        base.z.d[i]=0; 
+        curr.z.d[i]=0;
+    }
+    base.z.d[0]=1;
+    
+    bignum rr;
+    for(int i=0; i<8; i++) rr.d[i]=mont_rr[i];
+    bn_to_mont(&base.x, &base.x);
+    bn_to_mont(&base.y, &base.y);
+    bn_to_mont(&base.z, &base.z);
+    
+    for (int i = 255; i >= 0; i--) {
+        point_j_double(&curr);
+        if ((k->d[i / 32] >> (i % 32)) & 1) {
+            point_j_add_optimized(&curr, &base);
+        }
+    }
+    *res = curr;
+}
+
+// EC point addition in Jacobian coordinates (optimized)
+void point_j_add_optimized(point_j *p, point_j *q) {
+    if (q->z.d[0]==0 && q->z.d[1]==0 && q->z.d[2]==0 && q->z.d[3]==0 && q->z.d[4]==0 && q->z.d[5]==0 && q->z.d[6]==0 && q->z.d[7]==0) return;
+    if (p->z.d[0]==0 && p->z.d[1]==0 && p->z.d[2]==0 && p->z.d[3]==0 && p->z.d[4]==0 && p->z.d[5]==0 && p->z.d[6]==0 && p->z.d[7]==0) { *p = *q; return; }
+    
+    bignum z1z1, z2z2, u1, u2, s1, s2, h, r, t1, t2;
+    bn_mul_mont(&z1z1, &p->z, &p->z);
+    bn_mul_mont(&z2z2, &q->z, &q->z);
+    bn_mul_mont(&u1, &p->x, &z2z2);
+    bn_mul_mont(&u2, &q->x, &z1z1);
+    bn_mul_mont(&t1, &p->z, &z1z1);
+    bn_mul_mont(&s1, &p->y, &t1);
+    bn_mul_mont(&t2, &q->z, &z2z2);
+    bn_mul_mont(&s2, &q->y, &t2);
+    
+    if (bn_ucmp_ge(&u1, &u2) && bn_ucmp_ge(&u2, &u1)) {
+        if (bn_ucmp_ge(&s1, &s2) && bn_ucmp_ge(&s2, &s1)) {
+            point_j_double(p);
+        } else {
+            for(int i=0; i<8; i++) p->z.d[i]=0;
+        }
+        return;
+    }
+    
+    bn_mod_sub(&h, &u2, &u1);
+    bn_mod_sub(&r, &s2, &s1);
+    bn_mul_mont(&t1, &p->z, &q->z);
+    bn_mul_mont(&p->z, &t1, &h);
+    bn_mul_mont(&t1, &h, &h);
+    bn_mul_mont(&t2, &t1, &h);
+    bn_mul_mont(&u1, &u1, &t1);
+    bn_mul_mont(&p->x, &r, &r);
+    bn_mod_sub(&p->x, &p->x, &t2);
+    bn_mod_sub(&p->x, &p->x, &u1);
+    bn_mod_sub(&p->x, &p->x, &u1);
+    bn_mod_sub(&t1, &u1, &p->x);
+    bn_mul_mont(&p->y, &r, &t1);
+    bn_mul_mont(&t1, &s1, &t2);
+    bn_mod_sub(&p->y, &p->y, &t1);
+}
+
 // Point normalization: convert from Jacobian (x, y, z) to affine (x, y, 1)
 void point_normalize(point_j *p) {
     if (p->z.d[0]==0 && p->z.d[1]==0 && p->z.d[2]==0 && p->z.d[3]==0 && 
@@ -243,6 +327,173 @@ bool bloom_might_contain(__global uchar* f, uint s, uchar* h) {
 int binary_search_hash160(__global uchar* a, uint n, uchar* t) {
     int l=0, r=(int)n-1; while(l<=r){ int m=l+(r-l)/2; __global uchar* h=a+m*20; int c=0; for(int i=0; i<20; i++){ if(t[i]<h[i]){c=-1;break;} if(t[i]>h[i]){c=1;break;} } if(c==0) return 1; if(c<0) r=m-1; else l=m+1; }
     return 0;
+}
+
+// Test kernel for optimized EC operations
+__kernel void test_optimized_ec(
+    __global uchar* priv_out,
+    __global uchar* pub_out,
+    unsigned long seed,
+    uint gid
+) {
+    unsigned int st = (uint)seed ^ gid;
+    bignum k;
+    for (int i = 0; i < 8; i++) {
+        st = st * 1103515245 + 12345;
+        uint s = st;
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        k.d[i] = s;
+        priv_out[i] = s;
+    }
+
+    point_j res;
+    scalar_mult_g_optimized(&res, &k);
+    
+    if (res.z.d[0]==0 && res.z.d[1]==0 && res.z.d[2]==0 && res.z.d[3]==0 && 
+        res.z.d[4]==0 && res.z.d[5]==0 && res.z.d[6]==0 && res.z.d[7]==0) {
+        return;
+    }
+
+    bignum zinv, zinv2, x, y, tmp;
+    bn_from_mont(&tmp, &res.z);
+    bn_mod_inverse(&zinv, &tmp);
+    bn_to_mont(&zinv, &zinv);
+
+    bn_mul_mont(&zinv2, &zinv, &zinv);
+    bn_mul_mont(&tmp, &res.x, &zinv2);
+    bn_from_mont(&x, &tmp);
+
+    bn_mul_mont(&zinv2, &zinv2, &zinv);
+    bn_mul_mont(&tmp, &res.y, &zinv2);
+    bn_from_mont(&y, &tmp);
+
+    pub_out[0] = (y.d[0] & 1) ? 0x03 : 0x02;
+    for (int i = 0; i < 32; i++) {
+        pub_out[32 - i] = (x.d[i / 4] >> ((i % 4) * 8)) & 0xff;
+    }
+}
+
+// Optimized EC grid addition kernel (from calc_addrs.cl)
+__kernel void ec_add_grid(
+    __global bn_word *points_out, 
+    __global bn_word *z_heap,
+    __global bn_word *row_in, 
+    __global bignum *col_in
+) {
+    bignum rx, ry;
+    bignum x1, y1, a, b, c, d, e, z;
+    bn_word cy;
+    int i, cell, start;
+
+    /* Load the row increment point */
+    i = 2 * get_global_id(1);
+    for(int j=0; j<8; j++) rx.d[j] = col_in[i].d[j];
+    for(int j=0; j<8; j++) ry.d[j] = col_in[i+1].d[j];
+
+    cell = get_global_id(0);
+    start = ((((2 * cell) / ACCESS_STRIDE) * ACCESS_BUNDLE) + (cell % (ACCESS_STRIDE/2)));
+
+    for (i = 0; i < 8; i++) {
+        x1.d[i] = row_in[start + (i*ACCESS_STRIDE)];
+    }
+    start += (ACCESS_STRIDE/2);
+    for (i = 0; i < 8; i++) {
+        y1.d[i] = row_in[start + (i*ACCESS_STRIDE)];
+    }
+
+    bn_mod_sub(&z, &x1, &rx);
+
+    cell += (get_global_id(1) * get_global_size(0));
+    start = (((cell / ACCESS_STRIDE) * ACCESS_BUNDLE) + (cell % ACCESS_STRIDE));
+
+    for (i = 0; i < 8; i++) {
+        z_heap[start + (i*ACCESS_STRIDE)] = z.d[i];
+    }
+
+    bn_mod_sub(&b, &y1, &ry);
+    bn_mod_add(&c, &x1, &rx);
+    bn_mod_add(&d, &y1, &ry);
+    bn_mul_mont(&y1, &b, &b);
+    bn_mul_mont(&x1, &z, &z);
+    bn_mul_mont(&e, &c, &x1);
+    bn_mod_sub(&y1, &y1, &e);
+
+    start = ((((2 * cell) / ACCESS_STRIDE) * ACCESS_BUNDLE) + (cell % (ACCESS_STRIDE/2)));
+    for (i = 0; i < 8; i++) {
+        points_out[start + (i*ACCESS_STRIDE)] = y1.d[i];
+    }
+    start += (ACCESS_STRIDE/2);
+
+    bn_mul_mont(&x1, &z, &x1);
+    bn_mul_mont(&e, &d, &x1);
+    bn_mod_sub(&x1, &e, &y1);
+    bn_mod_sub(&x1, &x1, &y1);
+
+    for (i = 0; i < 8; i++) {
+        points_out[start + (i*ACCESS_STRIDE)] = x1.d[i];
+    }
+}
+
+// Batch modular inversion kernel (from calc_addrs.cl)
+__kernel void heap_invert(__global bn_word *z_heap, int batch) {
+    bignum a, b, c, z;
+    int i, off, lcell, hcell, start;
+
+    off = get_global_size(0);
+    lcell = get_global_id(0);
+    hcell = (off * batch) + lcell;
+    
+    for (i = 0; i < (batch-1); i++) {
+        start = (((lcell / ACCESS_STRIDE) * ACCESS_BUNDLE) + (lcell % ACCESS_STRIDE));
+        for(int j=0; j<8; j++) a.d[j] = z_heap[start + j*ACCESS_STRIDE];
+
+        lcell += off;
+        start = (((lcell / ACCESS_STRIDE) * ACCESS_BUNDLE) + (lcell % ACCESS_STRIDE));
+        for(int j=0; j<8; j++) b.d[j] = z_heap[start + j*ACCESS_STRIDE];
+
+        bn_mul_mont(&z, &a, &b);
+
+        start = (((hcell / ACCESS_STRIDE) * ACCESS_BUNDLE) + (hcell % ACCESS_STRIDE));
+        for(int j=0; j<8; j++) z_heap[start + j*ACCESS_STRIDE] = z.d[j];
+
+        lcell += off;
+        hcell += off;
+    }
+
+    /* Invert the root, fix up 1/ZR -> R/Z */
+    bn_mod_inverse(&z, &z);
+
+    bignum rr;
+    for(int j=0; j<8; j++) rr.d[j] = mont_rr[j];
+    bn_mul_mont(&z, &z, &rr);
+
+    lcell = get_global_id(0);
+    hcell = (off * batch) + lcell;
+    
+    for (i = 0; i < (batch-1); i++) {
+        start = (((lcell / ACCESS_STRIDE) * ACCESS_BUNDLE) + (lcell % ACCESS_STRIDE));
+        for(int j=0; j<8; j++) a.d[j] = z_heap[start + j*ACCESS_STRIDE];
+
+        lcell += off;
+        start = (((lcell / ACCESS_STRIDE) * ACCESS_BUNDLE) + (lcell % ACCESS_STRIDE));
+        for(int j=0; j<8; j++) b.d[j] = z_heap[start + j*ACCESS_STRIDE];
+
+        start = (((hcell / ACCESS_STRIDE) * ACCESS_BUNDLE) + (hcell % ACCESS_STRIDE));
+        for(int j=0; j<8; j++) c.d[j] = z_heap[start + j*ACCESS_STRIDE];
+
+        bn_mul_mont(&z, &z, &c);
+
+        start = (((lcell / ACCESS_STRIDE) * ACCESS_BUNDLE) + (lcell % ACCESS_STRIDE));
+        for(int j=0; j<8; j++) z_heap[start + j*ACCESS_STRIDE] = z.d[j];
+
+        lcell += off;
+        hcell += off;
+    }
+
+    start = (((lcell / ACCESS_STRIDE) * ACCESS_BUNDLE) + (lcell % ACCESS_STRIDE));
+    for(int j=0; j<8; j++) z_heap[start + j*ACCESS_STRIDE] = z.d[j];
 }
 
 // Kernels
