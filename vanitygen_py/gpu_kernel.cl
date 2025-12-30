@@ -120,6 +120,12 @@ __constant bn_word Gy[] = { 0x483ADA77, 0x26A3C465, 0x5DA4FBFC, 0x0E1108A8, 0xFD
 
 typedef struct { bignum x, y, z; } point_j;
 
+// Forward declarations for EC functions
+void point_j_double(point_j *p);
+void point_j_add(point_j *p, point_j *q);
+void point_j_add_optimized(point_j *p, point_j *q);
+void point_normalize(point_j *p);
+
 // Optimized EC operations from calc_addrs.cl
 #define ACCESS_BUNDLE 1024
 #define ACCESS_STRIDE (ACCESS_BUNDLE/8)
@@ -321,12 +327,12 @@ int base58_encode_local(uchar* hash20, uchar version, char* output) {
 
 // Bloom & Binary Search
 uint bloom_hash(uint data_x, uint data_y, uint data_z, uint seed, uint m) {
-    """
-    Bloom hash function matching Python implementation exactly.
-    
-    This matches the bloom_hash function in balance_checker.py
-    and ensures Python and GPU use the same hash algorithm.
-    """
+    /*
+     * Bloom hash function matching Python implementation exactly.
+     * 
+     * This matches the bloom_hash function in balance_checker.py
+     * and ensures Python and GPU use the same hash algorithm.
+     */
     uint h = data_x ^ (seed * 0x9e3779b9);
     h = ((h ^ (h >> 16)) * 0x85ebca6b) & 0xFFFFFFFF;
     h = ((h ^ (h >> 13)) * 0xc2b2ae35) & 0xFFFFFFFF;
@@ -338,12 +344,12 @@ uint bloom_hash(uint data_x, uint data_y, uint data_z, uint seed, uint m) {
 }
 
 bool bloom_might_contain(__global uchar* f, uint s, uchar* h) {
-    """
-    Check if bloom filter might contain the given hash160.
-    
-    This function checks individual BITS in the bloom filter,
-    not whole bytes. This is the correct implementation.
-    """
+    /*
+     * Check if bloom filter might contain the given hash160.
+     * 
+     * This function checks individual BITS in the bloom filter,
+     * not whole bytes. This is the correct implementation.
+     */
     uint bits = s * 8;
     
     // Extract first 9 bytes as uint3 (matching Python implementation)
