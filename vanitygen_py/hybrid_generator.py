@@ -347,7 +347,14 @@ class HybridGenerator:
         if balance_checker and balance_checker.is_loaded:
             print("[HybridGenerator] Loading addresses for matching...")
             self._build_hash160_set()
-            print(f"[HybridGenerator] Loaded {len(self.check_hash160s)} addresses for matching")
+            # Handle case where check_hash160s might be None
+            if self.check_hash160s:
+                print(f"[HybridGenerator] Loaded {len(self.check_hash160s)} addresses for matching")
+            else:
+                print("[HybridGenerator] No addresses loaded (check_hash160s is None)")
+        else:
+            # No balance checker or not loaded
+            self.check_hash160s = None
     
     def _build_hash160_set(self):
         """Build a set of hash160 values for efficient matching."""

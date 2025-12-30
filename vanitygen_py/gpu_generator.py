@@ -86,6 +86,10 @@ class GPUGenerator:
         self.gpu_available = False
         self.pool = None
         self.paused = False
+        
+        # Separate counters for GPU-only mode
+        self.keys_generated = 0  # Total keys generated on GPU
+        self.keys_checked = 0     # Keys checked against funded list
 
         # OpenCL resources
         self.ctx = None
@@ -796,6 +800,9 @@ class GPUGenerator:
                     # Update stats
                     with self.stats_lock:
                         self.stats_counter += self.batch_size
+                        # In balance check mode, keys are generated and checked
+                        self.keys_generated += self.batch_size
+                        self.keys_checked += self.batch_size
 
                 except Exception as e:
                     print(f"[DEBUG] _search_loop_with_balance_check() - ERROR in batch {batch_count}: {e}")
@@ -985,6 +992,9 @@ class GPUGenerator:
                     # Update stats BEFORE processing results to ensure counter increments even on errors
                     with self.stats_lock:
                         self.stats_counter += self.batch_size
+                        # In GPU-only mode, keys are both generated AND checked against list
+                        self.keys_generated += self.batch_size
+                        self.keys_checked += self.batch_size  # Every key is checked against list
 
                     # Process found results
                     # First pass: check bloom filter matches (high priority)
@@ -1191,6 +1201,9 @@ class GPUGenerator:
                     addresses_checked += self.batch_size
                     with self.stats_lock:
                         self.stats_counter += self.batch_size
+                        # In GPU-only exact matching mode, keys are both generated AND checked
+                        self.keys_generated += self.batch_size
+                        self.keys_checked += self.batch_size  # Every key is checked against list
 
                     # Process found results
                     num_found = found_count[0]
@@ -1333,6 +1346,10 @@ class GPUGenerator:
                 # Update stats
                 with self.stats_lock:
                     self.stats_counter += self.batch_size
+                    # In CPU-assisted mode, keys are generated on GPU
+                    self.keys_generated += self.batch_size
+                    # But we don't check them against funded list here (only vanity prefix)
+                    # So keys_checked stays at 0 unless balance checker is active
 
             except Exception as e:
                 print(f"Error processing keys in parallel: {e}")
@@ -1359,6 +1376,9 @@ class GPUGenerator:
         self.pause_event.clear()
         self.paused = False
         self.stats_counter = 0
+        # Reset separate counters
+        self.keys_generated = 0
+        self.keys_checked = 0
         self.rng_seed = struct.unpack('<Q', os.urandom(8))[0]
 
         self._ec_total_generated = 0
@@ -1507,4 +1527,12 @@ class GPUGenerator:
         with self.stats_lock:
             count = self.stats_counter
             self.stats_counter = 0
-        return count
+            # For GPU-only mode, also return separate counters
+            generated = self.keys_generated
+            checked = self.keys_checked
+        # Return dict with all stats for compatibility
+        return {
+            'total': count,  # Legacy counter for backward compatibility
+            'keys_generated': generated,
+            'keys_checked': checked
+        }
