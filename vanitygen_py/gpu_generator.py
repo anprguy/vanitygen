@@ -480,7 +480,8 @@ class GPUGenerator:
         keys = []
         for key_data in gpu_keys:
             # Convert 8 uint32s to 32 bytes
-            key_bytes = b''.join(struct.pack('<I', word) for word in key_data)
+            # GPU stores in little-endian, need to reverse for Bitcoin big-endian format
+            key_bytes = b''.join(struct.pack('<I', word) for word in key_data)[::-1]
             keys.append(BitcoinKey(key_bytes))
         return keys
 
@@ -509,14 +510,19 @@ class GPUGenerator:
             cl.enqueue_copy(self.queue, pubkey_bytes, pub_buf)
             self.queue.finish()
 
+            # GPU stores private key in little-endian byte order (LSB first)
+            # BitcoinKey expects big-endian byte order (MSB first, Bitcoin standard)
+            # The GPU kernel extracts bytes as: d[i] = (k.d[i/4] >> ((i%4)*8)) & 0xff
+            # which produces little-endian representation, so we need to reverse
             priv_le = priv_words.tobytes()
-            priv_int = int.from_bytes(priv_le, 'little')
+            priv_be = priv_le[::-1]  # Reverse bytes to convert to big-endian
 
             try:
+                # Verify the private key is non-zero
+                priv_int = int.from_bytes(priv_be, 'big')
                 if priv_int <= 0:
                     raise ValueError("invalid private key (zero)")
 
-                priv_be = priv_int.to_bytes(32, 'big')
                 cpu_key = BitcoinKey(priv_be)
                 cpu_pub = cpu_key.get_public_key(compressed=True)
                 gpu_pub = pubkey_bytes.tobytes()
@@ -925,12 +931,9 @@ class GPUGenerator:
                         for i in range(min(num_found, max_results)):
                             offset = i * 128
 
-                            # Extract key words (first 32 bytes = 8 uint32)
-                            key_words = []
-                            for j in range(8):
-                                word = int.from_bytes(results_buffer[offset + j*4:offset + j*4 + 4], 'little')
-                                key_words.append(word)
-                            key_bytes = b''.join(struct.pack('<I', word) for word in key_words)
+                            # Extract key bytes (first 32 bytes)
+                            # GPU stores in little-endian, need to reverse for Bitcoin big-endian format
+                            key_bytes = results_buffer[offset:offset+32].tobytes()[::-1]
 
                             # Extract address string (after key, null-terminated)
                             addr_start = offset + 32
@@ -1128,12 +1131,9 @@ class GPUGenerator:
                         for i in range(min(num_found, max_results)):
                             offset = i * 128
 
-                            # Extract key words (first 32 bytes = 8 uint32)
-                            key_words = []
-                            for j in range(8):
-                                word = int.from_bytes(results_buffer[offset + j*4:offset + j*4 + 4], 'little')
-                                key_words.append(word)
-                            key_bytes = b''.join(struct.pack('<I', word) for word in key_words)
+                            # Extract key bytes (first 32 bytes)
+                            # GPU stores in little-endian, need to reverse for Bitcoin big-endian format
+                            key_bytes = results_buffer[offset:offset+32].tobytes()[::-1]
 
                             # Extract address string (after key, null-terminated)
                             addr_start = offset + 32
@@ -1240,7 +1240,8 @@ class GPUGenerator:
 
             # Split data into chunks for workers
             # Convert 8 uint32s to 32 bytes
-            all_key_bytes = [b''.join(struct.pack('<I', word) for word in key_data) for key_data in gpu_keys_data]
+            # GPU stores in little-endian, need to reverse for Bitcoin big-endian format
+            all_key_bytes = [b''.join(struct.pack('<I', word) for word in key_data)[::-1] for key_data in gpu_keys_data]
             
             chunk_size = max(1, len(all_key_bytes) // num_workers)
             chunks = [all_key_bytes[i:i + chunk_size] for i in range(0, len(all_key_bytes), chunk_size)]
