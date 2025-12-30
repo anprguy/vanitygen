@@ -96,6 +96,9 @@ class GPUGenerator:
         self.kernel_full = None  # Full GPU address generation
         self.kernel_full_exact = None
         self.kernel_ec_check = None
+        self.kernel_ec_add_grid = None
+        self.kernel_heap_invert = None
+        self.kernel_test_optimized_ec = None
         self.device = None
 
         # GPU configuration
@@ -393,6 +396,28 @@ class GPUGenerator:
                 print(f"[DEBUG] init_cl() - WARNING: ec_check_sample kernel not available: {e}")
                 self.kernel_ec_check = None
 
+            # Compile the optimized EC kernels from calc_addrs.cl
+            try:
+                self.kernel_ec_add_grid = self.program.ec_add_grid
+                print("[DEBUG] init_cl() - ✓ ec_add_grid kernel compiled")
+            except Exception as e:
+                print(f"[DEBUG] init_cl() - WARNING: ec_add_grid kernel not available: {e}")
+                self.kernel_ec_add_grid = None
+
+            try:
+                self.kernel_heap_invert = self.program.heap_invert
+                print("[DEBUG] init_cl() - ✓ heap_invert kernel compiled")
+            except Exception as e:
+                print(f"[DEBUG] init_cl() - WARNING: heap_invert kernel not available: {e}")
+                self.kernel_heap_invert = None
+
+            try:
+                self.kernel_test_optimized_ec = self.program.test_optimized_ec
+                print("[DEBUG] init_cl() - ✓ test_optimized_ec kernel compiled")
+            except Exception as e:
+                print(f"[DEBUG] init_cl() - WARNING: test_optimized_ec kernel not available: {e}")
+                self.kernel_test_optimized_ec = None
+
             print(f"[DEBUG] init_cl() - SUCCESS: GPU initialized: {self.device.name}")
             print(f"[DEBUG] init_cl() - GPU Info:")
             print(f"  - Device: {self.device.name}")
@@ -488,6 +513,36 @@ class GPUGenerator:
     def _perform_ec_check(self, seed, gid, check_index):
         if self.kernel_ec_check is None or self.ctx is None or self.queue is None or np is None:
             return
+
+    def _test_optimized_ec(self, seed, gid):
+        """Test the optimized EC functions"""
+        if self.kernel_test_optimized_ec is None or self.ctx is None or self.queue is None or np is None:
+            return None, None
+
+        priv_words = np.zeros(32, dtype=np.uint8)
+        pubkey_bytes = np.zeros(33, dtype=np.uint8)
+
+        mf = cl.mem_flags
+        priv_buf = cl.Buffer(self.ctx, mf.WRITE_ONLY, priv_words.nbytes)
+        pub_buf = cl.Buffer(self.ctx, mf.WRITE_ONLY, pubkey_bytes.nbytes)
+
+        try:
+            self.kernel_test_optimized_ec(
+                self.queue,
+                (1,),
+                None,
+                priv_buf,
+                pub_buf,
+                np.uint64(seed),
+                np.uint32(gid),
+            )
+            cl.enqueue_copy(self.queue, priv_words, priv_buf)
+            cl.enqueue_copy(self.queue, pubkey_bytes, pub_buf)
+            self.queue.finish()
+            return priv_words.tobytes(), pubkey_bytes.tobytes()
+        except Exception as e:
+            print(f"[DEBUG] _test_optimized_ec() - ERROR: {e}")
+            return None, None
 
         priv_words = np.zeros(8, dtype=np.uint32)
         pubkey_bytes = np.zeros(33, dtype=np.uint8)
@@ -972,14 +1027,22 @@ class GPUGenerator:
                                 # CRITICAL: Verify address on CPU because GPU EC is currently fake
                                 # This ensures we don't report invalid addresses
                                 real_addr = key.get_p2pkh_address()
-                                
+
+                                # Check if GPU and CPU addresses match
+                                if addr != real_addr:
+                                    print(f"\n⚠️  WARNING: GPU/CPU ADDRESS MISMATCH")
+                                    print(f"   GPU generated: {addr}")
+                                    print(f"   CPU correct:   {real_addr}")
+                                    print(f"   Private key:   {key.get_wif()}")
+                                    print(f"   This means GPU EC implementation is BROKEN")
+                                    print(f"   Skipping this result\n")
+                                    continue
+
                                 # Only report if it's a real match (prefix or bloom)
-                                # Note: The match found on GPU was based on fake EC, so it's likely
-                                # the real address won't match. But we MUST report the real one.
                                 is_real_match = False
                                 if self.prefix and real_addr.startswith(self.prefix):
                                     is_real_match = True
-                                
+
                                 if bloom_match and self.balance_checker:
                                     balance = self.balance_checker.check_balance(real_addr)
                                     if balance > 0:
