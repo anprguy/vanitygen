@@ -320,8 +320,48 @@ int base58_encode_local(uchar* hash20, uchar version, char* output) {
 }
 
 // Bloom & Binary Search
+uint bloom_hash(uint data_x, uint data_y, uint data_z, uint seed, uint m) {
+    """
+    Bloom hash function matching Python implementation exactly.
+    
+    This matches the bloom_hash function in balance_checker.py
+    and ensures Python and GPU use the same hash algorithm.
+    """
+    uint h = data_x ^ (seed * 0x9e3779b9);
+    h = ((h ^ (h >> 16)) * 0x85ebca6b) & 0xFFFFFFFF;
+    h = ((h ^ (h >> 13)) * 0xc2b2ae35) & 0xFFFFFFFF;
+    h ^= (data_y * seed) & 0xFFFFFFFF;
+    h = ((h ^ (h >> 16)) * 0x85ebca6b) & 0xFFFFFFFF;
+    h = ((h ^ (h >> 13)) * 0xc2b2ae35) & 0xFFFFFFFF;
+    h ^= (data_z * seed * 2) & 0xFFFFFFFF;
+    return h % m;
+}
+
 bool bloom_might_contain(__global uchar* f, uint s, uchar* h) {
-    uint bits = s*8; for(uint i=0; i<7; i++) { uint idx = ( ((uint*)h)[0] ^ (i*0x9e3779b9) ) % bits; if(!(f[idx/8] & (1<<(idx%8)))) return false; }
+    """
+    Check if bloom filter might contain the given hash160.
+    
+    This function checks individual BITS in the bloom filter,
+    not whole bytes. This is the correct implementation.
+    """
+    uint bits = s * 8;
+    
+    // Extract first 9 bytes as uint3 (matching Python implementation)
+    uint data_x = h[0] | (h[1] << 8) | (h[2] << 16);
+    uint data_y = h[3] | (h[4] << 8) | (h[5] << 16);
+    uint data_z = h[6] | (h[7] << 8) | (h[8] << 16);
+    
+    // Check all hash functions
+    for(uint i = 0; i < 7; i++) {
+        uint bit_idx = bloom_hash(data_x, data_y, data_z, i, bits);
+        uint byte_idx = bit_idx / 8;      // Which byte
+        uint bit_offset = bit_idx % 8;    // Which bit within that byte
+        
+        // CRITICAL: Check the SPECIFIC BIT, not the whole byte
+        if (!(f[byte_idx] & (1 << bit_offset))) {
+            return false;
+        }
+    }
     return true;
 }
 int binary_search_hash160(__global uchar* a, uint n, uchar* t) {

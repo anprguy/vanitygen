@@ -1027,14 +1027,22 @@ class GPUGenerator:
                                 # CRITICAL: Verify address on CPU because GPU EC is currently fake
                                 # This ensures we don't report invalid addresses
                                 real_addr = key.get_p2pkh_address()
-                                
+
+                                # Check if GPU and CPU addresses match
+                                if addr != real_addr:
+                                    print(f"\n⚠️  WARNING: GPU/CPU ADDRESS MISMATCH")
+                                    print(f"   GPU generated: {addr}")
+                                    print(f"   CPU correct:   {real_addr}")
+                                    print(f"   Private key:   {key.get_wif()}")
+                                    print(f"   This means GPU EC implementation is BROKEN")
+                                    print(f"   Skipping this result\n")
+                                    continue
+
                                 # Only report if it's a real match (prefix or bloom)
-                                # Note: The match found on GPU was based on fake EC, so it's likely
-                                # the real address won't match. But we MUST report the real one.
                                 is_real_match = False
                                 if self.prefix and real_addr.startswith(self.prefix):
                                     is_real_match = True
-                                
+
                                 if bloom_match and self.balance_checker:
                                     balance = self.balance_checker.check_balance(real_addr)
                                     if balance > 0:

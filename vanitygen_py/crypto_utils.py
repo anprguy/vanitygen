@@ -81,3 +81,37 @@ def base58_decode(s):
         
     except Exception:
         return None
+
+def decode_base58_address(address):
+    """
+    Decode Bitcoin address to (version_byte, hash160_bytes)
+    
+    This function extracts the hash160 payload from a Bitcoin address,
+    which is what the GPU uses for bloom filter matching.
+    
+    Args:
+        address: Base58check-encoded Bitcoin address string
+        
+    Returns:
+        tuple: (version_byte, hash160_bytes) or (None, None) if invalid
+        
+    Example:
+        >>> version, hash160 = decode_base58_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+        >>> version  # 0x00 for mainnet P2PKH
+        0
+        >>> hash160.hex()  # 20-byte hash160
+        '62e907b15cbf27d5425399ebf6f0fb50ebb88f18'
+    """
+    try:
+        decoded = base58_decode(address)
+        if decoded is None or len(decoded) < 25:
+            return None, None
+            
+        # Extract version byte and hash160 payload
+        version = decoded[0]
+        hash160 = decoded[1:21]  # 20 bytes
+        
+        return version, hash160
+        
+    except Exception:
+        return None, None
