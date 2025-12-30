@@ -24,6 +24,7 @@ from PySide6.QtCore import QThread, Signal, Qt
 from .cpu_generator import CPUGenerator
 from .gpu_generator import GPUGenerator
 from .balance_checker import BalanceChecker
+from .hybrid_generator import HybridGenerator, COINCURVE_AVAILABLE
 
 class LoadBitcoinCoreThread(QThread):
     """Background thread for loading Bitcoin Core chainstate data."""
@@ -98,6 +99,18 @@ class GeneratorThread(QThread):
                 gpu_only=self.gpu_only,
                 ec_check_interval=self.ec_check_interval,
             )
+        elif self.mode == 'hybrid':
+            # Hybrid mode: GPU for RNG + coincurve for EC math
+            self.generator = HybridGenerator(
+                prefix=self.prefix,
+                batch_size=self.batch_size,
+                num_workers=self.cpu_cores,
+                device_selector=self.gpu_device_selector,
+                use_gpu=True,
+            )
+            # Set balance checker if available
+            if self.balance_checker and self.balance_checker.is_loaded:
+                self.generator.set_balance_checker(self.balance_checker)
         else:
             self.generator = CPUGenerator(
                 self.prefix,
@@ -118,33 +131,61 @@ class GeneratorThread(QThread):
         
         while self.running:
             time.sleep(1)
-            new_keys = self.generator.get_stats()
-            total_keys += new_keys
-            elapsed = time.time() - start_time
-            speed = total_keys / elapsed if elapsed > 0 else 0
+            
+            # Get stats - handle different generator interfaces
+            if self.mode == 'hybrid':
+                stats = self.generator.get_stats()
+                total_keys = stats.get('total_generated', 0)
+                speed = stats.get('rate_per_second', 0)
+            else:
+                new_keys = self.generator.get_stats()
+                total_keys += new_keys
+                elapsed = time.time() - start_time
+                speed = total_keys / elapsed if elapsed > 0 else 0
             self.stats_updated.emit(total_keys, speed)
 
-            # Check results
+            # Check results - handle different result formats
             try:
-                while not self.generator.result_queue.empty():
-                    result = self.generator.result_queue.get_nowait()
-                    # Handle both 3-tuple and 4-tuple results for backward compatibility
-                    if len(result) == 3:
-                        addr, wif, pubkey = result
-                    elif len(result) == 4:
-                        addr, wif, pubkey, _ = result  # Ignore balance if already computed
-                    else:
-                        print(f"Unexpected result format: {result}")
-                        continue
+                if self.mode == 'hybrid':
+                    # Hybrid generator returns dict results via get_result()
+                    result = self.generator.get_result(timeout=0.01)
+                    while result:
+                        addr = result.get('address', '')
+                        wif = result.get('wif', '')
+                        pubkey = result.get('pubkey', '')
+                        match_type = result.get('match_type', '')
+                        
+                        # Check balance
+                        balance, is_in_funded_list = self.balance_checker.check_balance_and_membership(addr)
+                        self.address_found.emit(addr, wif, pubkey, balance, is_in_funded_list)
+                        
+                        if balance > 0 and not self.auto_resume:
+                            self.running = False
+                            self.generator.stop()
+                            break
+                        
+                        result = self.generator.get_result(timeout=0.01)
+                else:
+                    # CPU/GPU generators use result_queue
+                    while not self.generator.result_queue.empty():
+                        result = self.generator.result_queue.get_nowait()
+                        # Handle both 3-tuple and 4-tuple results for backward compatibility
+                        if len(result) == 3:
+                            addr, wif, pubkey = result
+                        elif len(result) == 4:
+                            addr, wif, pubkey, _ = result  # Ignore balance if already computed
+                        else:
+                            print(f"Unexpected result format: {result}")
+                            continue
 
-                    # Check balance
-                    balance, is_in_funded_list = self.balance_checker.check_balance_and_membership(addr)
-                    self.address_found.emit(addr, wif, pubkey, balance, is_in_funded_list)
-                    if balance > 0 and not self.auto_resume:
-                        # Pause if funded address found (as per requirements)
-                        self.running = False
-                        self.generator.stop()
-                        break
+                        # Check balance
+                        balance, is_in_funded_list = self.balance_checker.check_balance_and_membership(addr)
+                        self.address_found.emit(addr, wif, pubkey, balance, is_in_funded_list)
+                        if balance > 0 and not self.auto_resume:
+                            # Pause if funded address found (as per requirements)
+                            self.running = False
+                            self.generator.stop()
+                            break
             except Exception as e:
                 print(f"Error processing results: {e}")
                 import traceback
@@ -234,10 +275,21 @@ class VanityGenGUI(QMainWindow):
         gen_mode_layout = QHBoxLayout()
         gen_mode_layout.addWidget(QLabel("Generation Mode:"))
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["CPU", "GPU (OpenCL)"])
+        self.mode_combo.addItems(["CPU", "GPU (OpenCL)", "Hybrid (GPU+coincurve) ✓"])
         self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
         gen_mode_layout.addWidget(self.mode_combo)
         settings_layout.addLayout(gen_mode_layout)
+        
+        # Hybrid mode info label
+        self.hybrid_info_label = QLabel(
+            "<b>Hybrid Mode (Recommended)</b>: Uses GPU for fast random number generation + "
+            "coincurve (Bitcoin Core's libsecp256k1) for 100% correct address generation. "
+            "Best balance of speed and guaranteed correctness."
+        )
+        self.hybrid_info_label.setWordWrap(True)
+        self.hybrid_info_label.setStyleSheet("color: #2e7d32; padding: 5px; background: #e8f5e9; border-radius: 3px;")
+        self.hybrid_info_label.setVisible(False)
+        settings_layout.addWidget(self.hybrid_info_label)
 
         # CPU Settings (visible in CPU mode)
         self.cpu_settings_widget = QWidget()
@@ -635,15 +687,26 @@ Whoever has this key controls these funds.<br><br>
             self.gpu_device_options.append((dev["platform_index"], dev["device_index"]))
 
     def on_mode_changed(self, index):
-        """Show/hide CPU/GPU settings when mode changes."""
+        """Show/hide CPU/GPU/Hybrid settings when mode changes."""
+        cpu_mode = index == 0
         gpu_mode = index == 1
+        hybrid_mode = index == 2
+        
+        self.cpu_settings_widget.setVisible(cpu_mode)
         self.gpu_settings_widget.setVisible(gpu_mode)
-        self.cpu_settings_widget.setVisible(not gpu_mode)
+        self.hybrid_info_label.setVisible(hybrid_mode)
 
         if gpu_mode:
             self.populate_gpu_devices()
             self.log_output.append("GPU mode selected - adjust batch size and power for optimal performance")
             self.log_output.append("Tip: Larger batch sizes are faster but use more GPU memory")
+        elif hybrid_mode:
+            if COINCURVE_AVAILABLE:
+                self.log_output.append("Hybrid mode selected - GPU for RNG + coincurve for 100% correct addresses")
+                self.log_output.append("✓ coincurve (libsecp256k1) is available - guaranteed correct addresses!")
+            else:
+                self.log_output.append("⚠ WARNING: coincurve not installed! Install with: pip install coincurve")
+                self.log_output.append("Hybrid mode will fall back to CPU-only without coincurve.")
 
     def load_bitcoin_core(self):
         # Disable button and show loading state
@@ -706,7 +769,13 @@ Whoever has this key controls these funds.<br><br>
         addr_types = ['p2pkh', 'p2wpkh', 'p2sh-p2wpkh']
         addr_type = addr_types[addr_type_idx]
         
-        mode = 'gpu' if self.mode_combo.currentIndex() == 1 else 'cpu'
+        mode_index = self.mode_combo.currentIndex()
+        if mode_index == 0:
+            mode = 'cpu'
+        elif mode_index == 1:
+            mode = 'gpu'
+        else:
+            mode = 'hybrid'
         case_insensitive = self.case_insensitive_check.isChecked()
 
         cpu_cores = None
@@ -734,6 +803,17 @@ Whoever has this key controls these funds.<br><br>
             )
             if gpu_only:
                 self.log_output.append("WARNING: GPU Only mode performs ALL operations on GPU (no CPU address generation)")
+        elif mode == 'hybrid':
+            # Hybrid mode settings
+            cpu_cores = int(self.cpu_cores_spin.value())
+            batch_size = 50000  # Larger batch size for hybrid mode
+            
+            if COINCURVE_AVAILABLE:
+                self.log_output.append(f"Using Hybrid mode: GPU RNG + coincurve (libsecp256k1)")
+                self.log_output.append(f"✓ 100% correct Bitcoin addresses guaranteed")
+                self.log_output.append(f"Batch size: {batch_size:,}, Workers: {cpu_cores}")
+            else:
+                self.log_output.append("⚠ WARNING: coincurve not available - falling back to CPU")
         else:
             cpu_cores = int(self.cpu_cores_spin.value())
             self.log_output.append(f"Using CPU cores: {cpu_cores}")

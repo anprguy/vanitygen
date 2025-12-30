@@ -22,3 +22,18 @@ temp_addresses.csv
 # Test artifacts
 test_*.csv
 *.tmp
+
+# Found addresses output
+found_addresses.json
+found_*.json
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
