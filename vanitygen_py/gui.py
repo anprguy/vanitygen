@@ -491,6 +491,14 @@ class VanityGenGUI(QMainWindow):
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             filename = f"funded_address_{addr[:8]}_{timestamp}.txt"
             
+            # Calculate hash160 from public key
+            try:
+                from .crypto_utils import hash160
+                pubkey_bytes = bytes.fromhex(pubkey)
+                hash160_value = hash160(pubkey_bytes).hex()
+            except Exception:
+                hash160_value = "N/A"
+            
             with open(filename, 'w') as f:
                 f.write(f"Congratulations! Funded Address Found!\n")
                 f.write(f"{'='*50}\n\n")
@@ -500,6 +508,7 @@ class VanityGenGUI(QMainWindow):
                 f.write(f"Balance (BTC): {balance / 100_000_000:.8f} BTC\n\n")
                 f.write(f"Private Key (WIF): {wif}\n")
                 f.write(f"Public Key: {pubkey}\n")
+                f.write(f"Public Key Hash (Hash160): {hash160_value}\n")
                 f.write(f"{'='*50}\n\n")
                 f.write(f"Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"WARNING: Keep this file secure! Whoever has the private key controls the funds.\n")
@@ -511,6 +520,14 @@ class VanityGenGUI(QMainWindow):
 
     def show_congratulations(self, addr, wif, pubkey, balance, is_in_funded_list):
         """Show congratulations dialog when funded address found."""
+        # Calculate hash160 from public key
+        try:
+            from .crypto_utils import hash160
+            pubkey_bytes = bytes.fromhex(pubkey)
+            hash160_value = hash160(pubkey_bytes).hex()
+        except Exception:
+            hash160_value = "N/A"
+        
         title = "🏆 Congratulations! Funded Address Found! 🏆"
         message = f"""
 <b><font color='green' size='+2'>CONGRATULATIONS!</font></b><br><br>
@@ -526,6 +543,9 @@ You found a funded Bitcoin address with balance!<br><br>
 
 <b>Public Key:</b><br>
 <font size='-2'>{pubkey}</font><br><br>
+
+<b>Public Key Hash (Hash160):</b><br>
+<font size='-2'>{hash160_value}</font><br><br>
 
 <font color='red'><b>⚠ SECURITY WARNING:</b></font><br>
 The private key is displayed above. <b>Secure it immediately!</b><br>
@@ -812,9 +832,17 @@ Whoever has this key controls these funds.<br><br>
         if self.show_only_funded_check.isChecked() and balance <= 0:
             return
 
+        # Calculate hash160 from public key for verification
+        try:
+            from .crypto_utils import hash160
+            pubkey_bytes = bytes.fromhex(pubkey)
+            hash160_value = hash160(pubkey_bytes).hex()
+        except Exception:
+            hash160_value = "N/A"
+
         membership_status = "✓ YES" if is_in_funded_list else "✗ NO"
         type_display = addr_type if addr_type else 'N/A'
-        result_str = f"Address: {addr}\nPrivate Key: {wif}\nPublic Key: {pubkey}\nBalance: {balance}\nIn Funded List: {membership_status}\nAddress Type: {type_display}\n" + "-"*40 + "\n"
+        result_str = f"Address: {addr}\nPrivate Key: {wif}\nPublic Key: {pubkey}\nPublic Key Hash (Hash160): {hash160_value}\nBalance: {balance}\nIn Funded List: {membership_status}\nAddress Type: {type_display}\n" + "-"*40 + "\n"
         self.results_list.append(result_str)
         self.log_output.append(f"Match found: {addr} (Type: {type_display})")
         
